@@ -51,7 +51,8 @@ eframe = { version = "0.24.1", default-features = false, features = [
 # Glow is re-declared here to get the glGetError feature.
 glow = { version = "=0.12.3", features = ["debug_automatic_glGetError"] }
 log = "0.4"
-rfd = "0.12.1"
+# gtk3 is enabled for file dialogues in linux/macOS
+rfd = { version = "0.12.1", features = ["gtk3"] }
 clap = { version = "4.4.18", features = ["derive"] }
 num_enum = "0.7.2"
 #zmq = "0.10.0"
