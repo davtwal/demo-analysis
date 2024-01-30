@@ -1,0 +1,78 @@
+[package]
+name = "demo_analysis"
+version = "0.1.0"
+edition = "2021"
+authors = ["David Walker <davtwal@gmail.com>"]
+rust-version = "1.72"
+
+# This is the library that Python will use to interface with
+# our data types and functions.
+[lib]
+name = "demo_analysis_lib"
+crate-type = ["cdylib"]
+
+[dependencies]
+
+#########################
+# Demo Parsing dependencies
+
+# This is the parsing library we use.
+# We get directly from the github as the crates.io version is lacking
+# features and bug fixes we need.
+tf-demo-parser = {git="https://github.com/demostf/parser", branch="master"}
+
+# Used by tf-demo-parser, but we need to add serde as tf-demo-arser depends on it.
+bitbuffer = { version = "0.10.9", features = ["serde"] }
+
+# Use for quick vector normalization because it's cool.
+quake-inverse-sqrt = "0.1.3"
+itertools = "0.12.0"
+
+#########################
+# Analysis dependencies
+
+# PYO3 is the library we use to bind to Python.
+# extension-module: Allows the building of the library.
+# auto-initialize : When demo_analysis wants to run the analysis code, this
+#                   lets pyo3 initialize the interpreter on its own.
+pyo3 = { version = "0.19.0", features = ["extension-module", "auto-initialize"] }
+
+#########################
+# E-Frame dependencies.
+
+# E-Frame is used for viewing demos.
+egui = "0.24.1"
+eframe = { version = "0.24.1", default-features = false, features = [
+    "default_fonts", # Embed the default egui fonts.
+    "glow",          # Use the glow rendering backend. Alternative: "wgpu".
+    #"persistence",   # Enable restoring app state when restarting the app.
+] }
+
+# Glow is re-declared here to get the glGetError feature.
+glow = { version = "=0.12.3", features = ["debug_automatic_glGetError"] }
+log = "0.4"
+rfd = "0.12.1"
+clap = { version = "4.4.18", features = ["derive"] }
+num_enum = "0.7.2"
+#zmq = "0.10.0"
+# zmq uses an outdated version of zeromq-src
+# that has a really annoying error
+#zeromq-src = "=0.3.1"
+#ctrlc = "3.4.2"
+ordered-float = "4.2.0"
+
+#[patch.crates-io]
+# i don't use the crates-io version as this fork has a much
+# needed bugfix without any other changes
+#zmq = {git = "https://github.com/MarijnS95/rust-zmq", branch = "zeromq-src-0.3"}
+
+# Required by e-frame.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = "0.10"
+
+[profile.release]
+opt-level = 2 # fast and small wasm
+
+# Optimize all dependencies even in debug builds:
+#[profile.dev.package."*"]
+#opt-level = 2
