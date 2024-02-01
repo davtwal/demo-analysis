@@ -156,6 +156,8 @@ impl ParseWorker {
         })
     }
 
+    
+    #[allow(dead_code)]
     pub fn get_next(&self) -> Option<ParseProgressReport> {
         match self.prog_recv.try_recv() {
             Ok(report) => {

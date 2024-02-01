@@ -5,15 +5,16 @@ use std::hash::Hash;
 use std::thread::{self, JoinHandle};
 
 use tf_demo_parser::demo::data::DemoTick;
-use tf_demo_parser::demo::gamevent::GameEventType;
+use tf_demo_parser::demo::gamevent::{GameEvent, GameEventType};
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::message::Message;
-use tf_demo_parser::demo::message::packetentities::PacketEntity;
+use tf_demo_parser::demo::message::packetentities::{PacketEntity, UpdateType};
 use tf_demo_parser::demo::parser::handler::BorrowMessageHandler;
 use tf_demo_parser::demo::parser::MessageHandler;
 
 use tf_demo_parser::demo::packet::datatable::{ParseSendTable, ServerClass, ServerClassName};
 use tf_demo_parser::demo::packet::stringtable::StringTableEntry;
+use tf_demo_parser::demo::sendprop::SendPropIdentifier;
 use tf_demo_parser::{ParserState, DemoParser};
 
 macro_rules! get_class_name {
@@ -27,6 +28,8 @@ macro_rules! get_class_name {
 
 ///////////
 /// Threading Control Structures
+/// 
+#[allow(dead_code)]
 #[derive(Default)]
 pub enum InternalParseInstruction {
     #[default]
@@ -41,6 +44,7 @@ pub enum InternalParseInstruction {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 pub enum InternalParseResult {
     Header(Header),
     Tick(InternalGameState),    // Requested tick was reached, here is gamestate
@@ -50,12 +54,14 @@ pub enum InternalParseResult {
     Done                        // Finished parsing
 }
 
+#[allow(dead_code)]
 pub struct InternalParse {
     _handle: JoinHandle<()>,
     instruct_send: Sender<InternalParseInstruction>,
     result_recv: Receiver<InternalParseResult>
 }
 
+#[allow(dead_code)]
 impl InternalParse {
     pub fn new(fpath: std::path::PathBuf) -> Self {
         println!("internal parse new");
@@ -207,6 +213,192 @@ impl InternalParse {
 use std::sync::mpsc;
 pub use std::sync::mpsc::{Sender, Receiver};
 use std::collections::{HashSet, HashMap};
+
+////////////////
+/// Gatherer
+
+/// Gathers every single message, data table, etc.
+/// This
+
+pub enum GatherSeen {
+    Header(tf_demo_parser::demo::header::Header),
+    DataTables(Vec<tf_demo_parser::demo::packet::datatable::SendTableName>),
+    StringEntry(String, usize),
+    PacketMeta(u32),
+}
+
+#[derive(Default)]
+pub struct GathererState {
+    pub seen: Vec<GatherSeen>,
+    pub seen_message_types: HashMap<u32, Vec<tf_demo_parser::MessageType>>,
+    pub seen_packet_entities_types: HashSet<String>,
+    pub seen_game_event_types: HashSet<GameEventType>,
+
+    pub interesting_entities: HashMap<String, HashSet<(String, String)>>,
+    pub interesting_events: HashMap<u32, Vec<GameEventType>>,
+}
+
+#[derive(Default)]
+pub struct Gatherer {
+    pub state: GathererState, 
+    class_names: Vec<ServerClassName>,
+}
+
+impl MessageHandler for Gatherer {
+    type Output = GathererState;
+
+    fn does_handle(_message_type: tf_demo_parser::MessageType) -> bool {
+        true
+    }
+
+    fn handle_data_tables(
+            &mut self,
+            tables: &[ParseSendTable],
+            server_classes: &[ServerClass],
+            _parser_state: &ParserState,
+        ) {
+        self.state.seen.push(GatherSeen::DataTables(
+            Vec::from(tables).iter().map(|table| table.name.clone()).collect()
+        ));
+
+        self.class_names = server_classes
+            .iter()
+            .map(|class| &class.name)
+            .cloned()
+            .collect();
+    }
+
+    fn handle_header(&mut self, header: &Header) {
+        self.state.seen.push(GatherSeen::Header(header.clone()));
+    }
+
+    fn handle_message(&mut self, message: &Message, tick: DemoTick, _parser_state: &ParserState) {
+        self.state.seen_message_types
+            .entry(u32::from(tick))
+            .or_insert(Vec::new())
+            .push(message.get_message_type());
+
+        // Interesting message types:
+        match message {
+            Message::ClassInfo(m) => {
+                println!("---- ({}) Class info spotted; it's private though", tick);
+                println!("- {:?}", m);
+            },
+            Message::ServerInfo(m) => {
+                println!("---- ({}) Server info spotted; it's private though", tick);
+                println!("- {:?}", m);
+            }
+            Message::SetConVar(_) => {
+                println!("--- SetConVar spotted at {} ", tick);
+            }
+            // Message::GameEventList(m) => {
+            //     println!("---- ({}) Game Event List: ", tick);
+            //     for gedef in &m.event_list {
+            //         println!("-- {:?} : {:?}", gedef.event_type, gedef.id);
+            //         println!("- Entries: {:?}", gedef.entries.iter().map(|item| &item.name).collect::<Vec<&String>>())
+            //     }
+            // }
+            Message::PacketEntities(m) => {
+                for ent in &m.entities {
+                    let class_name: &str = self
+                        .class_names
+                        .get(usize::from(ent.server_class))
+                        .map(|class_name| class_name.as_str())
+                        .unwrap_or("");
+
+                    self.state.seen_packet_entities_types.insert(class_name.to_string());
+
+                    match class_name {
+                        // "CSniperDot" 
+                        // | "CTFGrenadePipebombProjectile"
+                        // | "CTFPlayer"
+                        // | "CTFPlayerResource"
+                        // | "CTFProjectile_Rocket"
+                        // | "CTFProjectile_HealingBolt"
+                        // | "CTFProjectile_SentryRocket"
+                        // | "CTFTeam"
+                        // | "CWeaponMedigun"
+                        // => {
+                        //     for prop in ent.props(_parser_state) {
+                        //         let propident = prop.identifier.names().unwrap_or((prop.identifier.to_string().into(), "uhoh".into()));
+
+                        //         self.state.interesting_entities
+                        //             .entry(class_name.to_string())
+                        //             .or_default()
+                        //             .insert((propident.0.to_string(), propident.1.to_string()));
+                        //     }
+                        // }
+
+                        "CTFProjectile_Rocket"
+                        | "CTFGrenadePipebombProjectile"
+                        => {
+                            const BASEENTITY_HOWNER: SendPropIdentifier = 
+                                SendPropIdentifier::new("DT_BaseEntity", "m_hOwnerEntity");
+
+
+                            if ent.update_type == UpdateType::Enter {
+                                for prop in ent.props(_parser_state) {
+                                    match prop.identifier {
+                                        BASEENTITY_HOWNER => {
+                                            println!("Projectile Enter: HOwner {}", prop.value);
+                                        },
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Message::GameEvent(m) => {
+                self.state.seen_game_event_types.insert(m.event.event_type());
+
+                match &m.event {
+                    GameEvent::RoundStart(_)
+                    | GameEvent::TeamPlayRoundStart(_)
+                    | GameEvent::TeamPlayRestartRound(_)
+                    | GameEvent::TeamPlayMapTimeRemaining(_)
+                    | GameEvent::PlayerChargeDeployed(_)
+                    | GameEvent::TeamPlayRoundWin(_)
+                    | GameEvent::PlayerRegenerate(_)
+                    | GameEvent::NpcHurt(_)
+                    => {
+                        self.state.interesting_events
+                            .entry(u32::from(tick))
+                            .or_default()
+                            .push(m.event.event_type());
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_packet_meta(
+            &mut self,
+            tick: DemoTick,
+            _meta: &tf_demo_parser::demo::packet::message::MessagePacketMeta,
+            _parser_state: &ParserState,
+        ) {
+        self.state.seen.push(GatherSeen::PacketMeta(u32::from(tick)));
+    }
+
+    fn handle_string_entry(
+            &mut self,
+            table: &str,
+            index: usize,
+            _entries: &StringTableEntry,
+            _parser_state: &ParserState,
+        ) {
+        self.state.seen.push(GatherSeen::StringEntry(String::from(table), index));
+    }
+
+    fn into_output(self, _state: &ParserState) -> Self::Output {
+        self.state
+    }
+}
 
 // Actual analyser
 
@@ -473,7 +665,7 @@ impl InternalsAnalyser {
         println!("Unknown: {:#?}", class_name)
     }
 
-    pub fn handle_projectile_entity(&mut self, entity: &PacketEntity, parser_state: &ParserState) {
+    pub fn handle_projectile_entity(&mut self, entity: &PacketEntity, _parser_state: &ParserState) {
         let class_name: &str = get_class_name!(self, entity.server_class);
         println!("PROJECTILE {:?} ({:} @ {})", entity.update_type, class_name, entity.entity_index);
         println!("Props: {:?}", entity.props);

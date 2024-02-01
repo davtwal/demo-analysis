@@ -39,6 +39,7 @@ impl IntoPy<TickPlayerDataPy> for TickPlayerData<'_> {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 #[repr(u8)]
 pub enum GroupingType {
@@ -83,7 +84,7 @@ pub struct TickTeamAnalysisPy {
 }
 
 impl<'a> TickTeamAnalysis<'a> {
-    pub fn new<T, U>(team: Team, playerlist: T, other_team: U) -> Self
+    pub fn new<T, U>(team: Team, playerlist: T, _other_team: U) -> Self
     where
         T: Iterator<Item = &'a Player> + Clone,
         U: Iterator<Item = &'a Player> + Clone

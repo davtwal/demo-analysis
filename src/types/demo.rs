@@ -20,6 +20,9 @@ pub struct TickData {
     pub projectiles: HashMap<u32, Projectile>,
     pub buildings: HashMap<u32, Building>,
     pub tick: DemoTick,
+
+    #[pyo3(get)]
+    pub tick_delta: f32,    // This is the amount of time (in seconds) that passed after the previous tick.
 }
 
 impl TickData {

@@ -7,12 +7,10 @@ if __name__ == "demoanalysis":
     sys.path.append(os.getcwd() + "/python/demo_analysis_lib")
     from demo_analysis_lib import entities as ent, events as evt
     import demo_analysis_lib as dal
+
 else:
-    print("This script should only be ran via demo_analysis.exe.")
-    print("If developing, use the following command to analyse:")
-    print("    cargo run -- -a [file path]")
-    print("Optionally, add in '-n' to avoid opening the window.")
-    quit()
+    from demo_analysis_lib import entities as ent, events as evt
+    import demo_analysis_lib as dal
 
 ## GROUPING
 from enum import Enum
@@ -62,7 +60,6 @@ class TickAnalysis:
 
 ## MAIN FUNCTIONS -> DO NOT NAME CHANGE
 
-from demo_analysis_lib import Player
 from numpy import float32
 
 # Called by the executable. DON'T CHANGE THIS FUNCTION'S NAME OR ARGUMENTS!
@@ -76,11 +73,17 @@ def tick_analysis_main(tick: dal.TickData):
     print(tick.tick)
 
 # Called by the executable. DON'T CHANGE THIS FUNCTION'S NAME OR ARGUMENTS!
-def generate_grouping(
-    player: Player,
-    teammates: List[Player],
-    enemies: List[Player]
-# RETURN VALUES:
-# Each return value is a list of how grouped up 
-) -> (List[(Player, float32)], List[(Player, float32)]) :
-    pass
+# def generate_grouping(
+#     player: ent.Player,
+#     teammates: List[ent.Player],
+#     enemies: List[ent.Player]
+# # RETURN VALUES:
+# # Each return value is a list of how grouped up 
+# ) -> (List[(ent.Player, float32)], List[(ent.Player, float32)]) :
+#     pass
+
+if __name__ == "__main__":
+    round_data = dal.load_demo_rounds("../assets/demofile.dem")
+    for i, data in enumerate(round_data):
+        print(f"Round {i} has {len(data.rounds)} rounds:")
+        print(f"Start/End: {data.rounds[0].start_tick} - {data.rounds[0].end_tick} ({data.rounds[0].end_tick - data.rounds[0].start_tick} total)")

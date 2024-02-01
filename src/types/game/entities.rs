@@ -437,6 +437,7 @@ pub enum ProjectileType {
 #[pyclass]
 #[derive(Default, Copy, Clone, Debug)]
 pub struct Projectile {
+    #[allow(dead_code)]
     pub(in super::super) entity: u32,
     pub shooter: u16,
     pub projectile_type: ProjectileType,

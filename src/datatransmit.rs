@@ -4,6 +4,7 @@ use crate::types::demo::{DemoData, TickData};
 
 const DEMO_ANALYSIS_PY: &str = "python/demoanalysis.py";
 
+#[allow(dead_code)]
 pub fn launch_demo_analysis(demodata: &DemoData) {
     Python::with_gil(move |py| -> PyResult<()> {
         let m = PyModule::from_code(py,
@@ -20,6 +21,7 @@ pub fn launch_demo_analysis(demodata: &DemoData) {
     }).unwrap();
 }
 
+#[allow(dead_code)]
 pub fn launch_tick_analysis(tickdata: &TickData) {
     Python::with_gil(move |py| -> PyResult<()> {
         let m = PyModule::from_code(py,
@@ -36,6 +38,7 @@ pub fn launch_tick_analysis(tickdata: &TickData) {
     }).unwrap();
 }
 
+#[allow(dead_code)]
 pub fn launch_get_player_groupings(tickdata: &TickData) {
     Python::with_gil(move |py| -> PyResult<()> {
         let m = PyModule::from_code(py,

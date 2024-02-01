@@ -11,16 +11,10 @@
 
 use std::collections::HashMap;
 
-use quake_inverse_sqrt::QSqrt;
-use tf_demo_parser::demo::gamevent::GameEventType;
-
-use crate::types::{DemoTick, EntityId};
 use crate::types::demo::TickData;
 use crate::types::game::{Class, Team};
 use crate::types::game::entities::{Player, PlayerState};
-use crate::types::math::{Vector, VectorXY};
-
-use super::parsing::datacollection::TickGameState;
+use crate::types::math::Vector;
 
 #[derive(Debug, Clone, Default)]
 pub enum GroupingType {
@@ -201,6 +195,7 @@ pub struct TickAnalysisData {
     player_id_map: HashMap<u32, usize>,
 }
 
+#[allow(dead_code)]
 impl TickAnalysisData {
     pub fn id_to_player<'a>(&'a self, id: u32) -> &'a Player {
         self.state.players.get(self.player_id_map[&id]).unwrap()

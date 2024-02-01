@@ -17,7 +17,6 @@
 //! 
 //////////////////////////////
 
-use clap::parser;
 use tf_demo_parser::demo::message::tempentities::EventInfo;
 use std::convert::TryFrom;
 use std::str::FromStr;
@@ -153,7 +152,7 @@ impl MessageHandler for GameStateAnalyserPlus {
         &mut self,
         tick: DemoTick,
         _meta: &MessagePacketMeta,
-        _parser_state: &ParserState,
+        parser_state: &ParserState,
     ) {
         // self.state.messages_this_tick.clear();
         // self.state.events_this_tick.clear();
@@ -162,6 +161,7 @@ impl MessageHandler for GameStateAnalyserPlus {
         self.state.data.tick = tick;
         self.state.kills.clear();
         self.tick = tick;
+        self.state.data.tick_delta = parser_state.demo_meta.interval_per_tick
     }
 
 
@@ -235,6 +235,9 @@ impl GameStateAnalyserPlus {
                 };
                 self.state.end_round(self.tick, victor)
             }
+            GameEvent::TeamPlayRoundStalemate(_) => {
+                self.state.end_round(self.tick, Team::Other)
+            }
             GameEvent::ObjectDestroyed(ObjectDestroyedEvent{index, ..}) => {
                 self.state.data.remove_building(*index as u32);
             }
@@ -278,15 +281,17 @@ impl GameStateAnalyserPlus {
     }
 
     pub fn handle_rocket(&mut self, entity: &PacketEntity, parser_state: &ParserState, projectile_type: ProjectileType) {
-        let projectile = self.state.data.get_or_create_projectile(entity.entity_index, projectile_type);
+        self.handle_projectile(entity, parser_state);
+        
+        let _projectile = self.state.data.get_or_create_projectile(entity.entity_index, projectile_type);
 
-        const ORIGIN: SendPropIdentifier =
+        const _ORIGIN: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFBaseRocket", "m_vecOrigin");
         
-        const INITIAL_VELOCITY : SendPropIdentifier =
+        const _INITIAL_VELOCITY : SendPropIdentifier =
             SendPropIdentifier::new("DT_TFBaseRocket", "m_vInitialVelocity");
 
-        const ANG_ROTATION : SendPropIdentifier =
+        const _ANG_ROTATION : SendPropIdentifier =
             SendPropIdentifier::new("DT_TFBaseRocket", "m_vInitialVelocity");
 
         //const 

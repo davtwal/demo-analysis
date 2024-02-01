@@ -1,17 +1,16 @@
 //! Sums of tick data.
 
-use std::ops::Add;
-
-pub struct DataSums {
-    // todo
+/// Summary of a player over the course of a round/demo.
+pub struct PlayerSummary {
+    
 }
 
-impl Add for DataSums {
-    type Output = DataSums;
+// Summary for each team.
+pub struct TeamSummary {
 
-    fn add(self, rhs: Self) -> Self::Output {
-        DataSums {
-            
-        }
-    }
+}
+
+/// A summary of a demo.
+pub struct DemoSummary {
+    
 }
