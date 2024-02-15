@@ -8,7 +8,7 @@ rust-version = "1.72"
 # This is the library that Python will use to interface with
 # our data types and functions.
 [lib]
-name = "demo_analysis_lib"
+name = "tf2dal"
 crate-type = ["cdylib"]
 
 [dependencies]

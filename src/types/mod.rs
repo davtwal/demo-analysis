@@ -8,3 +8,5 @@ pub use tf_demo_parser::demo::parser::analyser::UserId;
 pub mod math;
 pub mod game;
 pub mod demo;
+pub mod entities;
+pub mod events;

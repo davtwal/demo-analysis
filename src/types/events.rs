@@ -1,17 +1,23 @@
 use pyo3::prelude::*;
 
-use super::super::DemoTick;
+use super::{DemoTick, game::Team};
 
-use tf_demo_parser::demo::gameevent_gen::PlayerDeathEvent;
+use tf_demo_parser::demo::gameevent_gen::{
+    PlayerDeathEvent,
+    PlayerChargeDeployedEvent,
+    TeamPlayPointCapturedEvent
+};
 
 // this function is used in game::mod.rs but rust_analyzer thinks not
 #[allow(dead_code)]
-pub fn register_with(py: Python<'_>, module: &PyModule) -> PyResult<()> {
-    let child = PyModule::new(py, "events")?;
-    child.add_class::<Kill>()?;
-
-    module.add_submodule(child)?;
-    Ok(())
+pub(crate) fn get_submod(
+    py: Python<'_>,
+) -> PyResult<&PyModule> {
+    let module = PyModule::new(py, "events")?;
+    module.add_class::<Kill>()?;
+    module.add_class::<Capture>()?;
+    module.add_class::<Ubercharge>()?;
+    Ok(module)
 }
 
 // Information surrounding a PlayerDeath event
@@ -90,6 +96,56 @@ impl Kill {
             assister,
             dead_rocketjumping: death.rocket_jump,
             tick
+        }
+    }
+}
+
+// capture
+
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct Capture {
+    pub cp_index: u8,
+    pub cp_name: String,
+    pub team: Team,
+    // user ids
+    pub cappers: Vec<u16>,
+    pub tick: u32
+}
+
+impl Capture {
+    pub fn from_event(tick: DemoTick, capture: &TeamPlayPointCapturedEvent) -> Self {
+        let cappers: Vec<u16> = capture.cappers
+            .as_bytes()
+            .iter()
+            .cloned()
+            .map(|x| x as u16)
+            .collect();
+
+        Capture {
+            cp_index: capture.cp,
+            cp_name: capture.cp_name.to_string(),
+            team: Team::new(capture.team),
+            cappers,
+            tick: u32::from(tick)
+        }
+    }
+}
+
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct Ubercharge {
+    pub medic_id: u16,
+    pub ubered_id: u16,
+    pub tick: u32,
+}
+
+impl Ubercharge {
+    pub fn from_event(tick: DemoTick, charge: &PlayerChargeDeployedEvent) -> Self {
+        Ubercharge {
+            medic_id: charge.user_id,
+            ubered_id: charge.target_id,
+            tick: u32::from(tick),
         }
     }
 }

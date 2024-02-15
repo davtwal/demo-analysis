@@ -9,70 +9,30 @@ use pyo3::prelude::*;
 
 use num_enum::{TryFromPrimitive, IntoPrimitive};
 
-use super::super::{EntityId, UserId};
-use super::super::math::Vector;
+use super::{EntityId, UserId};
+use super::math::Vector;
 
-// this function is used in game::mod.rs but rust_analyzer thinks not
+/// This function is used by lib.rs, but the IDE thinks it's unused.
 #[allow(dead_code)]
-pub fn register_with(py: Python<'_>, module: &PyModule) -> PyResult<()> {
-    let ent_mod = PyModule::new(py, "entities")?;
-    
-    module.add_class::<World>()?;
+pub(crate) fn get_submod<'a>(
+    py: Python<'a>,
+) -> PyResult<&'a PyModule> {
+    let module = PyModule::new(py, "entities")?;
     module.add_class::<UserInfo>()?;
     module.add_class::<PlayerState>()?;
-    ent_mod.add_class::<Player>()?;
-    ent_mod.add_class::<Sentry>()?;
-    ent_mod.add_class::<Dispenser>()?;
-    ent_mod.add_class::<Teleporter>()?;
-
-    module.add_submodule(ent_mod)?;
-    Ok(())
-}
-
-
-
-/////////////////////////////////////////////
-/// WORLD
-/// /////////////////////////////////////////
-
-/// Defines the boundaries of the world as given by the demofile.
-/// You can expect bound_min.x < bound_max.x, and so on.
-#[pyclass(get_all)]
-#[derive(Default, Debug, Clone, PartialEq)]
-pub struct World {
-    /// The minimum.
-    pub bound_min: Vector,
-    
-    /// The maximum.
-    pub bound_max: Vector,
-}
-
-impl World {
-    pub fn adjoin_bounds(&self, other: &World) -> Self {
-        World {
-            bound_max: Vector {
-                x: f32::max(self.bound_max.x, other.bound_max.x),
-                y: f32::max(self.bound_max.y, other.bound_max.y),
-                z: f32::max(self.bound_max.z, other.bound_max.z),
-            },
-            bound_min: Vector {
-                x: f32::min(self.bound_min.x, other.bound_min.x),
-                y: f32::min(self.bound_min.y, other.bound_min.y),
-                z: f32::min(self.bound_min.z, other.bound_min.z),
-            }
-        }
-    }
-
-    pub fn stretch_to_include(&mut self, point: Vector) {
-        *self = self.adjoin_bounds(&World{bound_min: point, bound_max: point});
-    }
+    module.add_class::<Player>()?;
+    module.add_class::<Sentry>()?;
+    module.add_class::<Dispenser>()?;
+    module.add_class::<Teleporter>()?;
+    module.add_class::<Medigun>()?;
+    Ok(module)
 }
 
 /////////////////////////////////////////////
 /// PLAYER
 /// /////////////////////////////////////////
 
-use super::{Class, Team, ClassList};
+use super::game::{Class, Team, ClassList};
 
 use tf_demo_parser::demo::parser::analyser::UserInfo as TFUinf;
 //use tf_demo_parser::demo::parser::gamestateanalyser::{Player as TFPlayer};
@@ -162,9 +122,9 @@ impl PlayerState {
 }
 
 #[pyclass]
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Player {
-    pub(in super::super) entity: u32,
+    pub(crate) entity: u32,
     #[pyo3(get)]
     pub position: Vector,
     #[pyo3(get)]
@@ -181,6 +141,12 @@ pub struct Player {
     pub pitch_angle: f32,
     #[pyo3(get)]
     pub state: PlayerState,
+
+    #[pyo3(get)]
+    pub time_since_last_hurt: f32,
+
+    pub class_info: Option<ClassInfo>,
+
     #[pyo3(get)]
     pub info: Option<UserInfo>,
     #[pyo3(get)]
@@ -209,6 +175,96 @@ impl Player {
 
 #[pymethods]
 impl Player {
+    #[getter]
+    fn scout_info(&self) -> Option<ScoutInfo> {
+        match &self.class_info {
+            Some(inf) => match inf {
+                ClassInfo::Scout(inf) => Some(inf.clone()),
+                _ => None
+            }, None => None
+        }
+    }
+
+    #[getter]
+    fn soldier_info(&self) -> Option<SoldierInfo> {
+        match &self.class_info {
+            Some(inf) => match inf {
+                ClassInfo::Soldier(inf) => Some(inf.clone()),
+                _ => None
+            }, None => None
+        }
+    }
+
+    #[getter]
+    fn pyro_info(&self) -> Option<PyroInfo> {
+        match &self.class_info {
+            Some(inf) => match inf {
+                ClassInfo::Pyro(inf) => Some(inf.clone()),
+                _ => None
+            }, None => None
+        }
+    }
+
+    #[getter]
+    fn demoman_info(&self) -> Option<DemomanInfo> {
+        match &self.class_info {
+            Some(inf) => match inf {
+                ClassInfo::Demoman(inf) => Some(inf.clone()),
+                _ => None
+            }, None => None
+        }
+    }
+
+    #[getter]
+    fn heavy_info(&self) -> Option<HeavyInfo> {
+        match &self.class_info {
+            Some(inf) => match inf {
+                ClassInfo::Heavy(inf) => Some(inf.clone()),
+                _ => None
+            }, None => None
+        }
+    }
+
+    #[getter]
+    fn engineer_info(&self) -> Option<EngineerInfo> {
+        match &self.class_info {
+            Some(inf) => match inf {
+                ClassInfo::Engineer(inf) => Some(inf.clone()),
+                _ => None
+            }, None => None
+        }
+    }
+
+    #[getter]
+    fn medic_info(&self) -> Option<MedicInfo> {
+        match &self.class_info {
+            Some(inf) => match inf {
+                ClassInfo::Medic(inf) => Some(inf.clone()),
+                _ => None
+            }, None => None
+        }
+    }
+
+    #[getter]
+    fn sniper_info(&self) -> Option<SniperInfo> {
+        match &self.class_info {
+            Some(inf) => match inf {
+                ClassInfo::Sniper(inf) => Some(inf.clone()),
+                _ => None
+            }, None => None
+        }
+    }
+
+    #[getter]
+    fn spy_info(&self) -> Option<SpyInfo> {
+        match &self.class_info {
+            Some(inf) => match inf {
+                ClassInfo::Spy(inf) => Some(inf.clone()),
+                _ => None
+            }, None => None
+        }
+    }
+
     #[pyo3(name="closest_to")]
     pub fn py_closest_to_xy(&self, player_list: Vec<Player>) -> Player {
         self.closest_to_xy(player_list.iter().map(|p| p).collect_vec()).clone()
@@ -228,6 +284,94 @@ impl Player {
 
     pub fn is_alive(&self) -> bool {
         self.state == PlayerState::Alive
+    }
+
+    pub fn critheal_percent(&self) -> f32 {
+        ((self.time_since_last_hurt - 10.0) / 5.0).clamp(0.0, 1.0)
+    }
+}
+
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Medigun {
+    pub entity_id: u32,
+    pub owner: u32,
+    pub charge: f32,
+    pub heal_target: u32,
+    pub is_healing: bool,
+    pub is_holstered: bool,
+}
+
+impl Medigun {
+    pub fn new(entity_id: u32) -> Self {
+        Medigun {
+            entity_id: entity_id,
+            ..Default::default()
+        }
+    }
+}
+
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct ScoutInfo {}
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct SoldierInfo{}
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct PyroInfo{}
+
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct DemomanInfo{}
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct HeavyInfo{}
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct EngineerInfo{}
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct MedicInfo {
+    pub is_healing: bool,
+    pub heal_target: u32,
+    pub last_heal_target: u32
+}
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct SniperInfo{}
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct SpyInfo{}
+
+#[derive(Debug, Clone)]
+pub enum ClassInfo {
+    Scout(ScoutInfo),
+    Soldier(SoldierInfo),
+    Pyro(PyroInfo),
+    Demoman(DemomanInfo),
+    Heavy(HeavyInfo),
+    Engineer(EngineerInfo),
+    Medic(MedicInfo),
+    Sniper(SniperInfo),
+    Spy(SpyInfo),
+}
+
+impl ClassInfo {
+    pub fn from(class: Class) -> Result<Self, &'static str> {
+        use Class::*;
+        match class {
+            Scout => Ok(ClassInfo::Scout(ScoutInfo::default())),
+            Soldier => Ok(ClassInfo::Soldier(SoldierInfo::default())),
+            Pyro => Ok(ClassInfo::Pyro(PyroInfo::default())),
+            Demoman => Ok(ClassInfo::Demoman(DemomanInfo::default())),
+            Heavy => Ok(ClassInfo::Heavy(HeavyInfo::default())),
+            Engineer => Ok(ClassInfo::Engineer(EngineerInfo::default())),
+            Medic => Ok(ClassInfo::Medic(MedicInfo::default())),
+            Sniper => Ok(ClassInfo::Sniper(SniperInfo::default())),
+            Spy => Ok(ClassInfo::Spy(SpyInfo::default())),
+            _ => Err("no")
+        }
     }
 }
 

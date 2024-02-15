@@ -7,24 +7,59 @@ use std::ops::{Index, IndexMut};
 use num_enum::TryFromPrimitive;
 use num_enum::IntoPrimitive;
 
-pub mod entities;
-pub mod events;
-
-// used by lib.rs; not dead, compiler just stinky
+/// This function is used by lib.rs, but the IDE thinks it's unused.
 #[allow(dead_code)]
-pub fn register_with(py: Python<'_>, module: &PyModule) -> PyResult<()> {
-    //let child = PyModule::new(py, "game")?;
+pub(crate) fn get_submod(py: Python<'_>) -> PyResult<&PyModule> {
+    let module = PyModule::new(py, "game")?;
+    module.add_class::<World>()?;
     module.add_class::<Class>()?;
     module.add_class::<Team>()?;
     module.add_class::<ClassList>()?;
     module.add_class::<ClassListIter>()?;
     module.add_class::<Round>()?;
 
-    entities::register_with(py, module)?;
-    events::register_with(py, module)?;
-
-    Ok(())
+    Ok(module)
 }
+
+/////////////////////////////////////////////
+/// WORLD
+/// /////////////////////////////////////////
+
+use super::math::Vector;
+
+/// Defines the boundaries of the world as given by the demofile.
+/// You can expect bound_min.x < bound_max.x, and so on.
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct World {
+    /// The minimum.
+    pub bound_min: Vector,
+    
+    /// The maximum.
+    pub bound_max: Vector,
+}
+
+impl World {
+    pub fn adjoin_bounds(&self, other: &World) -> Self {
+        World {
+            bound_max: Vector {
+                x: f32::max(self.bound_max.x, other.bound_max.x),
+                y: f32::max(self.bound_max.y, other.bound_max.y),
+                z: f32::max(self.bound_max.z, other.bound_max.z),
+            },
+            bound_min: Vector {
+                x: f32::min(self.bound_min.x, other.bound_min.x),
+                y: f32::min(self.bound_min.y, other.bound_min.y),
+                z: f32::min(self.bound_min.z, other.bound_min.z),
+            }
+        }
+    }
+
+    pub fn stretch_to_include(&mut self, point: Vector) {
+        *self = self.adjoin_bounds(&World{bound_min: point, bound_max: point});
+    }
+}
+
 
 /////////////////////////////////////////////
 /// Class

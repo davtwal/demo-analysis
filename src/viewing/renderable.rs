@@ -4,7 +4,7 @@ use glow::HasContext;
 use eframe::egui_glow::glow;
 //use crate::analysis::Grouping;
 
-use crate::types::game::entities::Player;
+use crate::types::entities::Player;
 use crate::types::game::Team;
 
 pub trait Renderable {

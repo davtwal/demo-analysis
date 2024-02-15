@@ -4,12 +4,26 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use pyo3::prelude::*;
 
-use crate::types::game::entities::ProjectileType;
-
 use super::{DemoTick, EntityId};
-use super::game::entities::{Player, Sentry, Dispenser, Teleporter, Building, Projectile};
-use super::game::events::Kill;
-use super::game::Round;
+use super::entities::{
+    Player, Sentry, Dispenser, Teleporter, Building, Projectile,
+    Medigun, ProjectileType, BuildingClass
+};
+use super::events::{Kill, Capture};
+use super::game::{Round, World};
+
+/// This function is used by lib.rs, but the IDE thinks it's unused.
+#[allow(dead_code)]
+pub(crate) fn get_submod<'a>(
+    py: Python<'a>
+) -> PyResult<&'a PyModule> {
+    let module = PyModule::new(py, "demo")?;
+
+    module.add_class::<TickData>()?;
+    module.add_class::<DemoData>()?;
+
+    Ok(module)
+}
 
 #[pyclass]
 #[derive(Default, Debug, Clone)]
@@ -19,6 +33,7 @@ pub struct TickData {
     pub players: Vec<Player>,
     pub projectiles: HashMap<u32, Projectile>,
     pub buildings: HashMap<u32, Building>,
+    pub mediguns: HashMap<u32, Medigun>,
     pub tick: DemoTick,
 
     #[pyo3(get)]
@@ -63,7 +78,7 @@ impl TickData {
     pub fn get_or_create_building<T: Copy>(
         &mut self,
         entity_id: T,
-        class: super::game::entities::BuildingClass,
+        class: BuildingClass,
     ) -> &mut Building where u32: From<T>, EntityId: From<T> {
         self.buildings
             .entry(u32::from(entity_id))
@@ -72,6 +87,44 @@ impl TickData {
 
     pub fn remove_building<T: Copy>(&mut self, entity_id: T) where u32: From<T> {
         self.buildings.remove(&u32::from(entity_id));
+    }
+
+
+    pub fn get_or_create_medigun<T: Copy>(
+        &mut self,
+        entity_id: T
+    ) -> &mut Medigun where u32: From<T> {
+        self.mediguns
+            .entry(u32::from(entity_id))
+            .or_insert_with(|| Medigun::new(u32::from(entity_id)))
+    }
+
+    pub fn get_player_by_userid(&self, user_id: u16) -> Option<&Player> {
+        self.players
+            .iter()
+            .filter(|p| if let Some(_) = p.info {true} else {false})
+            .find(|p| p.info.as_ref().unwrap().user_id == user_id)
+    }
+
+    pub fn mut_player_by_userid(&mut self, user_id: u16) -> Option<&mut Player> {
+        self.players
+            .iter_mut()
+            .filter(|p| if let Some(_) = p.info {true} else {false})
+            .find(|p| p.info.as_ref().unwrap().user_id == user_id)
+    }
+
+    pub fn get_player_by_entityid(&self, entity_id: u32) -> Option<&Player> {
+        self.players
+            .iter()
+            .filter(|p| if let Some(_) = p.info {true} else {false})
+            .find(|p| p.entity == entity_id)
+    }
+
+    pub fn mut_player_by_entityid(&mut self, entity_id: u32) -> Option<&mut Player> {
+        self.players
+            .iter_mut()
+            .filter(|p| if let Some(_) = p.info {true} else {false})
+            .find(|p| p.entity == entity_id)
     }
 }
 
@@ -118,11 +171,18 @@ impl TickData {
         u32::from(self.tick)
     }
 
-    fn get_player_by_entityid(&self, entity_id: u32) -> Option<Player> {
+    #[getter]
+    pub fn mediguns(&self) -> Vec<Medigun> {
+        self.mediguns.values().cloned().collect_vec()
+    }
+
+    #[pyo3(name="get_player_by_entityid")]
+    pub fn py_get_player_by_entityid(&self, entity_id: u32) -> Option<Player> {
         self.players.iter().find(|p| p.entity == entity_id).cloned()
     }
 
-    fn get_player_by_userid(&self, user_id: u16) -> Option<Player> {
+    #[pyo3(name="get_player_by_userid")]
+    pub fn py_get_player_by_userid(&self, user_id: u16) -> Option<Player> {
         self.players
             .iter()
             .filter(|p| if let Some(_) = p.info {true} else {false})
@@ -152,9 +212,14 @@ pub struct DemoData {
     /// Every single kill that happened in the game.
     pub kills: Vec<Kill>,
 
+    pub point_captures: Vec<Capture>,
+
     /// TODO: Point captures, blocks/defends, ubers
     /// time spend on each class, etc.
     /// TODO: world
+
+    /// The minimum and maximum X, Y, and Z values players ever had positions.
+    pub player_reach_bounds: World,
 
     /// Tick data. Key: DemoTick as u32, Value: TickGameState
     pub tick_states: HashMap<u32, TickData>,
@@ -166,6 +231,8 @@ pub struct DemoDataSlice<'a> {
     pub duration: f32,
     pub rounds: Vec<&'a Round>,
     pub kills: Vec<&'a Kill>,
+    pub point_captures: Vec<&'a Capture>,
+    pub player_reach_bounds: World,
     pub tick_states: HashMap<u32, &'a TickData>,
 }
 
@@ -182,12 +249,19 @@ impl DemoData {
             .filter(|kill| u32::from(kill.tick) >= round.start_tick && u32::from(kill.tick) <= round.end_tick)
             .collect();
 
+        let point_captures = self.point_captures
+            .iter()
+            .filter(|cap| cap.tick >= round.start_tick && cap.tick <= round.end_tick)
+            .collect();
+
         DemoDataSlice {
             demo_filename: &self.demo_filename,
             map_name: &self.map_name,
             duration: self.duration,
             rounds: vec![&round],
             kills,
+            point_captures,
+            player_reach_bounds: self.player_reach_bounds.clone(),
             tick_states
         }
     }
@@ -201,6 +275,8 @@ impl From<DemoDataSlice<'_>> for DemoData {
             duration: value.duration,
             rounds: value.rounds.iter().map(|r| (*r).clone()).collect_vec(),
             kills: value.kills.iter().map(|r| (*r).clone()).collect_vec(),
+            point_captures: value.point_captures.clone().into_iter().cloned().collect(),
+            player_reach_bounds: value.player_reach_bounds,
             tick_states: value.tick_states.iter().map(|(t,s)| (*t, (*s).clone())).collect()
         }
     }
@@ -214,4 +290,18 @@ impl DemoData {
     fn py_round_data(&self, round: &Round) -> DemoData {
         self.round_data(round).into()
     }
+}
+
+// Post-game summary of a player
+#[pyclass(get_all)]
+#[derive(Default, Debug, Clone)]
+pub struct PlayerSummary {
+    pub kills: u32,
+    pub assists: u32,
+    pub deaths: u32,
+    pub buildings_destroyed: u32,
+    pub captures: u32,
+    pub defenses: u32,
+    //pub 
+    pub user_id: u16,
 }

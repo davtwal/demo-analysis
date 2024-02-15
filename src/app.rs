@@ -113,14 +113,16 @@ pub fn run(fnames: Vec<PathBuf>, do_analysis: bool) -> io::Result<()> {
 
             let (_, output) = parser.parse().unwrap();
 
+            println!("Outer map: {:#?}", output.outer_map);
+
             println!("Seen is of length {:?}, with {:?} containing messages", output.seen.len(), output.seen_message_types.len());
             println!("Continuing will go through the [seen] vector, without printing packet meta. String entries will be collapsed.");
-            pause();
+            //pause();
 
             fn match_remainder(seenitem: &GatherSeen, cur_print: &mut u32, cur_tick: &mut u32) {
                 match seenitem {
                     GatherSeen::Header(_) => {println!("Header."); *cur_print += 1;},
-                    GatherSeen::DataTables(dt) => {
+                    GatherSeen::_DataTables(dt) => {
                         println!("% Data Tables @ {} ({}): {:?}", cur_tick, dt.len(), 
                             dt.iter().map(|name| name.to_string()).sorted().collect_vec());
                         *cur_print += 1;
@@ -133,25 +135,35 @@ pub fn run(fnames: Vec<PathBuf>, do_analysis: bool) -> io::Result<()> {
                 }
             }
 
+            println!("seen ent handles: ");
+            for handle in output.seen_ent_handles {
+                println!("      - {:08} ({:08X})", handle, handle);
+            }
+            println!("seen player entids: ");
+            for pent in output.seen_player_entids {
+                println!("      - {:08} ({:08X})", pent, pent);
+            }
+
             let mut cur_iter = output.seen.iter();
             let mut cur_print: u32 = 0;
             let mut cur_tick: u32 = 0;
             while let Some(seenitem) = cur_iter.next() {
                 match seenitem {
-                    GatherSeen::StringEntry(tablename, _) => {
-                        // string table name, number of changes / entries
-                        let mut cur_collected_strings = HashMap::<&String, u32>::new();
+                    GatherSeen::StringEntry(tablename, _index, _entry) => {
+                        //println!("$ String Entry {} @ {}: {:?}", tablename, index, entry);
+                        //cur_print += 1;
 
-                        cur_collected_strings.insert(tablename, 1);
-
-                        while let Some(nextitem) = cur_iter.next() {
-                            match nextitem {
-                                GatherSeen::StringEntry(newtablename, _) => {
-                                    *cur_collected_strings.entry(newtablename).or_insert(0) += 1;
-                                },
-                                other => {match_remainder(other, &mut cur_print, &mut cur_tick); break}
-                            }
-                        }
+                         // string table name, number of changes / entries
+                         let mut cur_collected_strings = HashMap::<&String, u32>::new();
+                         cur_collected_strings.insert(tablename, 1);
+                         while let Some(nextitem) = cur_iter.next() {
+                             match nextitem {
+                                 GatherSeen::StringEntry(newtablename, _, _entry) => {
+                                     *cur_collected_strings.entry(newtablename).or_insert(0) += 1;
+                                 },
+                                 other => {match_remainder(other, &mut cur_print, &mut cur_tick); break}
+                             }
+                         }
 
                         println!("$ String Entries @ {}: {:?}", cur_tick, cur_collected_strings);
                     }
@@ -159,13 +171,13 @@ pub fn run(fnames: Vec<PathBuf>, do_analysis: bool) -> io::Result<()> {
                 }
 
                 if cur_print >= 10 {
-                    pause();
+                    //pause();
                     cur_print = 0;
                 }
             }
 
             println!("|| Finished printing [seen]. Continuing will count the number of times each message type was sent.");
-            pause();
+            //pause();
 
             let mut typecollect = HashMap::<u8, u32>::new();
             for (_, typelist) in output.seen_message_types {
@@ -210,16 +222,16 @@ pub fn run(fnames: Vec<PathBuf>, do_analysis: bool) -> io::Result<()> {
                 println!("# {mtype}: {count}");
             }
 
-            pause();
+            //pause();
 
             println!("\n{:?}", output.seen_packet_entities_types);
 
-            pause();
+            //pause();
 
             println!("\n{:?}", output.seen_game_event_types);
 
             println!("{} interesting entities", output.interesting_entities.len());
-            pause();
+            //pause();
 
             for (entname, props) in output.interesting_entities {
                 println!("- {}: {} total props", entname, props.len());
@@ -236,10 +248,19 @@ pub fn run(fnames: Vec<PathBuf>, do_analysis: bool) -> io::Result<()> {
                 }
             }
 
-            pause(); println!("\n");
+            //pause(); println!("\n");
 
             for (tick, eventlist) in output.interesting_events.iter().sorted_by_key(|x| x.0) {
                 println!("- {}, {:?}", tick, eventlist);
+            }
+
+            //pause(); println!("\n");
+
+            for table in output.interesting_datatable_entries {
+                println!("- {:}", table.name.as_str());
+                for prop in table.props {
+                    println!(":: {:?}", prop);
+                }
             }
         }
     }

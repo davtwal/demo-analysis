@@ -3,6 +3,9 @@
 *.pyd
 .ipynb_checkpoints/
 
+# output of kmapper, it's bige
+python/kmapper_out
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 .pytest_cache/

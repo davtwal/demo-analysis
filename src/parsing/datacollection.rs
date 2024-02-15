@@ -17,49 +17,69 @@
 //! 
 //////////////////////////////
 
-use tf_demo_parser::demo::message::tempentities::EventInfo;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::str::FromStr;
 
-use tf_demo_parser::demo::gameevent_gen::ObjectDestroyedEvent;
-use tf_demo_parser::demo::gamevent::GameEvent;
-use tf_demo_parser::demo::message::packetentities::{PacketEntity, UpdateType};
-use tf_demo_parser::demo::message::Message;
-use tf_demo_parser::demo::packet::datatable::{ParseSendTable, ServerClass, ServerClassName};
-use tf_demo_parser::demo::packet::message::MessagePacketMeta;
-use tf_demo_parser::demo::packet::stringtable::StringTableEntry;
-use tf_demo_parser::demo::parser::handler::BorrowMessageHandler;
-use tf_demo_parser::demo::parser::MessageHandler;
-use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
+use tf_demo_parser::{
+    MessageType, ParserState, ReadResult, Stream,
+    demo::{
+        gamevent::GameEvent,
 
-use tf_demo_parser::{MessageType, ParserState, ReadResult, Stream};
+        gameevent_gen::ObjectDestroyedEvent,
 
-use tf_demo_parser::demo::vector::{Vector as TFVec, VectorXY as TFVecXY};
+        message::{
+            Message,
+            tempentities::EventInfo,
+            packetentities::{
+                PacketEntity,
+                UpdateType,
+            },
+        },
 
-use crate::types::{DemoTick, EntityId};
+        packet::{
+            datatable::{
+                ParseSendTable,
+                ServerClass,
+                ServerClassName,
+            },
+
+            message::MessagePacketMeta,
+            stringtable::StringTableEntry,
+        },
+
+        parser::{
+            handler::BorrowMessageHandler,
+            MessageHandler,
+        },
+
+        sendprop::{
+            SendProp,
+            SendPropIdentifier as SPI,
+            SendPropValue,
+        },
+
+        vector::{
+            Vector as TFVec,
+            VectorXY as TFVecXY,
+        }
+    }
+};
+
+use crate::types::DemoTick;
 use crate::types::math::{Vector, VectorXY};
-use crate::types::game::{Round, Team, Class};
-use crate::types::game::events::Kill;
-use crate::types::game::entities::*;
+use crate::types::game::{World, Round, Team, Class};
+use crate::types::events::{Capture, Kill, Ubercharge};
+use crate::types::entities::*;
+use crate::types::demo::TickData;
 
 //use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, Copy)]
-pub struct ProjectileUpdate {
-    pub entityid: EntityId,
-    pub update_type: UpdateType
-}
-
-impl Default for ProjectileUpdate {
-    fn default() -> Self {
-        ProjectileUpdate {
-            entityid: EntityId::default(),
-            update_type: UpdateType::Preserve
-        }
-    }
-}
-
-use crate::types::demo::TickData;
+///////////////////////////////////////////////////
+///////////////////////////////////////////////////
+///////////////////////////////////////////////////
+/// TICK GAME STATE
+/// ///////////////////////////////////////////////
 
 #[derive(Default, Debug, Clone)]
 pub struct TickGameState {
@@ -75,8 +95,9 @@ pub struct TickGameState {
     // The parser should be collecting these as "new information"
     // every tick.
     pub kills: Vec<Kill>,
-
-
+    pub captures: Vec<Capture>,
+    pub ubercharges: Vec<Ubercharge>,
+    pub players_hit: Vec<u32>, // by entity_id
 }
 
 impl TickGameState {
@@ -96,22 +117,92 @@ impl TickGameState {
     }
 }
 
+///////////////////////////////////////////////////////
+/// GAME STATE ANALYSER: DEFINTION
+/// ///////////////////////////////////////////////////
+/// ///////////////////////////////////////////////////
+/// ///////////////////////////////////////////////////
+
+#[derive(Default, Debug)]
+pub struct HandleMap {
+    // used to convert handles (such as m_hOwner) to entity ids
+    handle_to_ent: HashMap<u32, u32>,
+
+    // weapon entity id -> hOwner
+    // to get weapon owner identity do
+    // outer_map.get(weapon_map.get(entity_id))
+    entity_owners: HashMap<u32, u32>,
+}
+
+impl HandleMap {
+    /// entity_id: The ID of the entity being registered.
+    /// entity_handle: The handle (via m_hOuter) of the entity being registered.
+    pub fn register_entity_handle(&mut self, entity_id: u32, entity_handle: u32) {
+        self.handle_to_ent.insert(entity_handle, entity_id);
+    }
+
+    pub fn register_entity_owner(&mut self, entity_id: u32, owner_handle: u32) {
+        self.entity_owners.insert(entity_id, owner_handle);
+    }
+
+    pub fn get_entity_owner_id(&self, entity_id: u32) -> Option<u32> {
+        match self.entity_owners.get(&entity_id) {
+            Some(owner_handle) => self.handle_to_ent.get(owner_handle).copied(),
+            None => None
+        }
+    }
+
+    pub fn get_entity_id(&self, entity_handle: u32) -> Option<u32> {
+        self.handle_to_ent.get(&entity_handle).copied()
+    }
+
+    pub fn handle_prop<'a>(&mut self, entity: &PacketEntity, prop: &'a SendProp) -> Option<&'a SendProp> {
+        match prop.identifier {
+            SPI_BASEENTITY_OWNER
+            | SPI_BASECOMBATWEP_OWNER
+            => {
+                self.register_entity_owner(
+                    u32::from(entity.entity_index), 
+                    get_prop_int_u32(&prop.value)
+                );
+            },
+
+            SPI_ATTR_CONT_HOUTER
+            | SPI_ATTR_MNGR_HOUTER
+            | SPI_ATTR_LIST_HOUTER
+            => {
+                self.register_entity_handle(
+                    u32::from(entity.entity_index), 
+                    get_prop_int_u32(&prop.value)
+                );
+            }
+
+            _ => return Some(prop)
+        }
+        None
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct GameStateAnalyserPlus {
     pub state: TickGameState,
     tick: DemoTick,
     class_names: Vec<ServerClassName>,
+
+    handle_map: HandleMap,
 }
 
-
+// The goal for message handler is to get out of message handler into impl as
+// quickly as possible for organization purposes.
 impl MessageHandler for GameStateAnalyserPlus {
     type Output = TickGameState;
 
-    // Legit just copied
     fn does_handle(message_type: MessageType) -> bool {
         matches!(
             message_type,
-            MessageType::PacketEntities | MessageType::GameEvent | MessageType::TempEntities
+            MessageType::PacketEntities     // Packet of entities!
+            | MessageType::GameEvent        // All the events!
+            | MessageType::TempEntities     // Not actually handled right now
         )
     }
 
@@ -147,34 +238,22 @@ impl MessageHandler for GameStateAnalyserPlus {
     }
 
 
-    // Legit just copied
     fn handle_packet_meta(
         &mut self,
         tick: DemoTick,
-        _meta: &MessagePacketMeta,
+        meta: &MessagePacketMeta,
         parser_state: &ParserState,
     ) {
-        // self.state.messages_this_tick.clear();
-        // self.state.events_this_tick.clear();
-        // self.state.projectile_update_this_tick.clear();
-        // self.state.temp_entity_messages.clear();
-        self.state.data.tick = tick;
-        self.state.kills.clear();
-        self.tick = tick;
-        self.state.data.tick_delta = parser_state.demo_meta.interval_per_tick
+        self.handle_tick_end(tick, parser_state);
+        self.handle_tick_start(tick, meta, parser_state);
     }
 
 
-    // Legit just copied
     fn into_output(self, _state: &ParserState) -> Self::Output {
         self.state
     }
 
-
-    // This is where the new stuff is
     fn handle_message(&mut self, message: &Message<'_>, tick: DemoTick, parser_state: &ParserState) {    
-        //self.state.messages_this_tick.push(message.get_message_type());
-
         match message {
             Message::PacketEntities(message) => {
                 for entity in &message.entities {
@@ -190,36 +269,78 @@ impl MessageHandler for GameStateAnalyserPlus {
     }
 }
 
-/*fn why_is_kill_private(tick: DemoTick, death: &PlayerDeathEvent) -> Kill {
-    Kill {
-        attacker_id: death.attacker,
-        assister_id: death.assister,
-        victim_id: death.user_id,
-        weapon: death.weapon.to_string(),
-        tick,
-    }
-}*/
+const CLASSNAME_PLAYER: &str = "CTFPlayer";
+const CLASSNAME_PLAYER_RESOURCE: &str = "CTFPlayerResource";
+const CLASSNAME_WEP_MEDIGUN: &str = "CWeaponMedigun";
+const CLASSNAME_SENTRY: &str = "CObjectSentrygun";
+const CLASSNAME_DISPENSER: &str = "CObjectDispenser";
+const CLASSNAME_TELEPORTER: &str = "CObjectTeleporter";
 
-use crate::types::game::entities::ProjectileType;
+const SPI_BASEENTITY_OWNER: SPI = SPI::new("DT_BaseEntity", "m_hOwnerEntity");
+const SPI_BASECOMBATWEP_OWNER: SPI = SPI::new("DT_BaseCombatWeapon", "m_hOwner");
+const SPI_ATTR_MNGR_HOUTER: SPI = SPI::new("DT_AttributeManager", "m_hOuter");
+const SPI_ATTR_CONT_HOUTER: SPI = SPI::new("DT_AttributeContainer", "m_hOuter");
+const SPI_ATTR_LIST_HOUTER: SPI = SPI::new("DT_AttributeList", "m_hOuter");
+
+const SPI_MEDIGUN_HEALTARG: SPI = SPI::new("DT_WeaponMedigun", "m_hHealingTarget");
+const SPI_MEDIGUN_HEALING: SPI = SPI::new("DT_WeaponMedigun", "m_bHealing");
+const SPI_MEDIGUN_HOLSTERED: SPI = SPI::new("DT_WeaponMedigun", "m_bHolstered");
+const SPI_MEDIGUN_CHARGE_LOCAL: SPI = SPI::new("DT_LocalTFWeaponMedigunData", "m_flChargeLevel");
+const SPI_MEDIGUN_CHARGE_NONLOCAL: SPI = SPI::new("DT_TFWeaponMedigunDataNonLocal", "m_flChargeLevel");
+
+//const SPI_ROCKET_ORIGIN: SPI = SPI::new("DT_TFBaseRocket", "m_vecOrigin");
+//const SPI_ROCKET_INIT_VEL : SPI = SPI::new("DT_TFBaseRocket", "m_vInitialVelocity");
+//const SPI_ROCKET_ANG_ROTATION : SPI = SPI::new("DT_TFBaseRocket", "m_vInitialVelocity");
+
+fn get_prop_int_u32(prop: &SendPropValue) -> u32 {
+    i64::try_from(prop).unwrap_or_default() as u32
+}
+
+fn get_prop_bool(prop: &SendPropValue) -> bool {
+    i64::try_from(prop).unwrap_or_default() != 0
+}
 
 impl GameStateAnalyserPlus {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn handle_temp_entity(&mut self, _events: &Vec<EventInfo>) {
-        //self.state.temp_entity_messages.push(events.clone());
+    pub fn handle_tick_end(&mut self, _next_tick: DemoTick, _parser_state: &ParserState) {
+        // noop atm
     }
+
+    pub fn handle_tick_start(&mut self,
+        tick: DemoTick,
+        _meta: &MessagePacketMeta,
+        parser_state: &ParserState,
+    ) {
+        for player in &mut self.state.data.players {
+            player.time_since_last_hurt += parser_state.demo_meta.interval_per_tick;
+        }
+
+        self.state.data.tick = tick;
+        self.state.data.tick_delta = parser_state.demo_meta.interval_per_tick;
+        self.tick = tick;
+
+        // Clear data that is captured per-tick
+        self.state.kills.clear();
+        self.state.captures.clear();
+        self.state.ubercharges.clear();
+    }
+
+    pub fn handle_temp_entity(&mut self, _events: &Vec<EventInfo>) {
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////////
+    /// EVENT HANDLING
+    ////////////////////////////////////////////////////////////////////////////
 
     pub fn handle_event(&mut self, event: &GameEvent, tick: DemoTick) {
         const WIN_REASON_TIME_LIMIT: u8 = 6;
 
-        //self.state.events_this_tick.push(event.event_type());
-
         match event {
-            GameEvent::PlayerDeath(event) => {
-                self.state.kills.push(Kill::from_event(tick, event));
-            }
+            // Round/point related
             GameEvent::RoundStart(_) => {
                 self.state.data.buildings.clear();
             }
@@ -238,15 +359,56 @@ impl GameStateAnalyserPlus {
             GameEvent::TeamPlayRoundStalemate(_) => {
                 self.state.end_round(self.tick, Team::Other)
             }
+
+            GameEvent::TeamPlayPointCaptured(event) => {
+                self.state.captures.push(Capture::from_event(tick, &event));
+            }
+
+            // Player related
+            GameEvent::PlayerDeath(event) => {
+                self.state.kills.push(Kill::from_event(tick, event));
+            }
+            
+            GameEvent::PlayerHurt(event) => {
+                if let Some(player) = self.state.data.mut_player_by_userid(event.user_id) {
+                    player.time_since_last_hurt = 0.0;
+                }
+            },
+            GameEvent::PlayerHealed(event) => {
+                // get players
+                if let Some(patient) = self.state.data.get_player_by_userid(event.patient) {
+                    if let Some(healer) = self.state.data.get_player_by_userid(event.healer) {
+                        if patient.team != healer.team || healer.class != Class::Medic {
+                            println!("NOTE: weird player healed: pat/heal team {:?} {:?}, heal class {:?}",
+                                    patient.team, healer.team, healer.class);
+                        }
+                        else {
+                            
+                        }
+                    }
+                }
+                else {
+                    println!("player healed with invalid patient");
+                }
+            }
+            GameEvent::PlayerChargeDeployed(event) => {
+                self.state.ubercharges.push(Ubercharge::from_event(tick, event))
+            }
+
+
+            // Object / building
             GameEvent::ObjectDestroyed(ObjectDestroyedEvent{index, ..}) => {
                 self.state.data.remove_building(*index as u32);
-            }
+            },
+
             _ => {}
         }
     }
 
-    // All of the below is copied from gamestateanalyser.
-
+    ////////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////////
+    /// ENTITY HANDLING
+    ////////////////////////////////////////////////////////////////////////////
     /*
     PROJECTILES FROM WEAPONS TO CARE ABOUT IN SIXES:
 	- tf_projectile_arrow : Huntsman arrows
@@ -264,18 +426,114 @@ impl GameStateAnalyserPlus {
             .get(usize::from(entity.server_class))
             .map(|class_name| class_name.as_str())
             .unwrap_or("");
-        match class_name {
-            "CTFPlayer" => self.handle_player_entity(entity, parser_state),
-            "CTFPlayerResource" => self.handle_player_resource(entity, parser_state),
-            "CWorld" => self.handle_world_entity(entity, parser_state),
-            "CObjectSentrygun" => self.handle_sentry_entity(entity, parser_state),
-            "CObjectDispenser" => self.handle_dispenser_entity(entity, parser_state),
-            "CObjectTeleporter" => self.handle_teleporter_entity(entity, parser_state),
-            // Projectiles
 
+        match class_name {
+            CLASSNAME_PLAYER => self.handle_player_entity(entity, parser_state),
+            CLASSNAME_PLAYER_RESOURCE => self.handle_player_resource(entity, parser_state),
+            "CWorld" => self.handle_world_entity(entity, parser_state),
+            CLASSNAME_SENTRY => self.handle_sentry_entity(entity, parser_state),
+            CLASSNAME_DISPENSER => self.handle_dispenser_entity(entity, parser_state),
+            CLASSNAME_TELEPORTER => self.handle_teleporter_entity(entity, parser_state),
+            
+            // Weapons
+            "CTFScattergun" 
+            => self.handle_weapon(entity, parser_state, Class::Scout),
+
+            "CTFRocketLauncher"
+            | "CTFRocketLauncher_AirStrike"
+            | "CTFRocketLauncher_DirectHit"
+            => self.handle_weapon(entity, parser_state, Class::Soldier),
+
+            "CTFFlamethrower"
+            => self.handle_weapon(entity, parser_state, Class::Pyro),
+
+            "CTFGrenadeLauncher"
+            | "CTFPipebombLauncher"
+            => self.handle_weapon(entity, parser_state, Class::Demoman),
+
+            "CTFMinigun"
+            => self.handle_weapon(entity, parser_state, Class::Heavy),
+
+            "CTFWrench"
+            => self.handle_weapon(entity, parser_state, Class::Engineer),
+
+            CLASSNAME_WEP_MEDIGUN => self.handle_medic_weapon(entity, parser_state),
+
+            "CTFSniperRifle"
+            | "CTFCompoundBow"
+            => self.handle_weapon(entity, parser_state, Class::Sniper),
+
+            "CTFRevolver"
+            => self.handle_weapon(entity, parser_state, Class::Spy),
+
+            // Projectiles
             "CTFProjectile_Rocket" => self.handle_rocket(entity, parser_state, ProjectileType::Rocket),
             _ => {
                 //println!("[{}] Handling Entity: {:?}{:?}", self.tick, entity.update_type, class_name);
+            }
+        }
+    }
+
+    pub fn handle_medic_weapon(&mut self, entity: &PacketEntity, parser_state: &ParserState) {
+        let medigun = self.state.data.get_or_create_medigun(entity.entity_index);
+
+        let mut new_target_handle: Option<u32> = None;
+        let mut new_charge: Option<f32> = None;
+        let mut heal_change: Option<bool> = None;
+        let mut holster_change: Option<bool> = None;
+        for prop in entity.props(parser_state) {
+            if let Some(prop) = self.handle_map.handle_prop(entity, &prop) {
+                match prop.identifier {
+                    SPI_MEDIGUN_HEALTARG => {
+                        new_target_handle = Some(get_prop_int_u32(&prop.value));
+                    },
+
+                    SPI_MEDIGUN_CHARGE_LOCAL
+                    | SPI_MEDIGUN_CHARGE_NONLOCAL => {
+                        new_charge = Some(f32::try_from(&prop.value).unwrap_or_default());
+                    },
+
+                    SPI_MEDIGUN_HEALING => {
+                        heal_change = Some(get_prop_bool(&prop.value));
+                    }
+
+                    SPI_MEDIGUN_HOLSTERED => {
+                        holster_change = Some(get_prop_bool(&prop.value));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // must do the get stuff after prop parse as the owner/etc could have been set during
+        // the prop parse
+        if let Some(medic_id) = self.handle_map.get_entity_owner_id(u32::from(entity.entity_index)) {
+            medigun.owner = medic_id;
+            if let Some(target_handle) = new_target_handle {
+                if let Some(target_id) = self.handle_map.get_entity_id(target_handle) {
+                    medigun.heal_target = target_id;
+                }
+            }
+
+            if let Some(charge) = new_charge {
+                medigun.charge = charge;
+            }
+
+            if let Some(is_healing) = heal_change {
+                medigun.is_healing = is_healing;
+            }
+
+            if let Some(is_holstered) = holster_change {
+                medigun.is_holstered = is_holstered;
+            }
+            
+        }
+    }
+
+    pub fn handle_weapon(&mut self, entity: &PacketEntity, parser_state: &ParserState, _class: Class) {
+        if entity.update_type == UpdateType::Enter {
+            for _prop in entity.props(parser_state) {
+                
             }
         }
     }
@@ -285,14 +543,9 @@ impl GameStateAnalyserPlus {
         
         let _projectile = self.state.data.get_or_create_projectile(entity.entity_index, projectile_type);
 
-        const _ORIGIN: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFBaseRocket", "m_vecOrigin");
-        
-        const _INITIAL_VELOCITY : SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFBaseRocket", "m_vInitialVelocity");
+        //const H_
 
-        const _ANG_ROTATION : SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFBaseRocket", "m_vInitialVelocity");
+        
 
         //const 
     }
@@ -338,7 +591,9 @@ impl GameStateAnalyserPlus {
                             }
                             "m_iPlayerClass" => {
                                 player.class =
-                                    Class::new(i64::try_from(&prop.value).unwrap_or_default())
+                                    Class::new(i64::try_from(&prop.value).unwrap_or_default());
+                                println!("updated player {} class to {:?}", player.info.as_ref().unwrap().user_id, player.class);
+                                player.class_info = ClassInfo::from(player.class).ok();
                             }
                             "m_iChargeLevel" => {
                                 player.charge = i64::try_from(&prop.value).unwrap_or_default() as u8
@@ -357,66 +612,69 @@ impl GameStateAnalyserPlus {
     pub fn handle_player_entity(&mut self, entity: &PacketEntity, parser_state: &ParserState) {
         let player = self.state.data.get_or_create_player(entity.entity_index);
 
-        const HEALTH_PROP: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BasePlayer", "m_iHealth");
-        const MAX_HEALTH_PROP: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BasePlayer", "m_iMaxHealth");
-        const LIFE_STATE_PROP: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BasePlayer", "m_lifeState");
+        const HEALTH_PROP: SPI = SPI::new("DT_BasePlayer", "m_iHealth");
+        const MAX_HEALTH_PROP: SPI = SPI::new("DT_BasePlayer", "m_iMaxHealth");
+        const LIFE_STATE_PROP: SPI =
+        SPI::new("DT_BasePlayer", "m_lifeState");
 
-        const LOCAL_ORIGIN: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFLocalPlayerExclusive", "m_vecOrigin");
-        const NON_LOCAL_ORIGIN: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_vecOrigin");
-        const LOCAL_ORIGIN_Z: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFLocalPlayerExclusive", "m_vecOrigin[2]");
-        const NON_LOCAL_ORIGIN_Z: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_vecOrigin[2]");
-        const LOCAL_EYE_ANGLES: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFLocalPlayerExclusive", "m_angEyeAngles[1]");
-        const NON_LOCAL_EYE_ANGLES: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[1]");
-        const LOCAL_PITCH_ANGLES: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFLocalPlayerExclusive", "m_angEyeAngles[0]");
-        const NON_LOCAL_PITCH_ANGLES: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[0]");
+        const LOCAL_ORIGIN: SPI =
+        SPI::new("DT_TFLocalPlayerExclusive", "m_vecOrigin");
+        const NON_LOCAL_ORIGIN: SPI =
+        SPI::new("DT_TFNonLocalPlayerExclusive", "m_vecOrigin");
+        const LOCAL_ORIGIN_Z: SPI =
+        SPI::new("DT_TFLocalPlayerExclusive", "m_vecOrigin[2]");
+        const NON_LOCAL_ORIGIN_Z: SPI =
+        SPI::new("DT_TFNonLocalPlayerExclusive", "m_vecOrigin[2]");
+        const LOCAL_EYE_ANGLES: SPI =
+        SPI::new("DT_TFLocalPlayerExclusive", "m_angEyeAngles[1]");
+        const NON_LOCAL_EYE_ANGLES: SPI =
+        SPI::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[1]");
+        const LOCAL_PITCH_ANGLES: SPI =
+        SPI::new("DT_TFLocalPlayerExclusive", "m_angEyeAngles[0]");
+        const NON_LOCAL_PITCH_ANGLES: SPI =
+        SPI::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[0]");
             
-        const SIMTIME_PROP: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BaseEntity", "m_flSimulationTime");
+        const SIMTIME_PROP: SPI =
+        SPI::new("DT_BaseEntity", "m_flSimulationTime");
 
         player.in_pvs = entity.in_pvs;
 
         for prop in entity.props(parser_state) {
-            match prop.identifier {
-                HEALTH_PROP => {
-                    player.health = i64::try_from(&prop.value).unwrap_or_default() as u16
+            if let Some(prop) = self.handle_map.handle_prop(entity, &prop) {
+                match prop.identifier {
+                    HEALTH_PROP => {
+                        player.health = i64::try_from(&prop.value).unwrap_or_default() as u16
+                    }
+                    MAX_HEALTH_PROP => {
+                        player.max_health = i64::try_from(&prop.value).unwrap_or_default() as u16
+                    }
+                    LIFE_STATE_PROP => {
+                        player.state = PlayerState::new(i64::try_from(&prop.value).unwrap_or_default() as u8)
+                    }
+                    LOCAL_ORIGIN | NON_LOCAL_ORIGIN => {
+                        let pos_xy = VectorXY::from(
+                            TFVecXY::try_from(&prop.value).unwrap_or_default()
+                        );
+                        player.position.x = pos_xy.x;
+                        player.position.y = pos_xy.y;
+                    }
+                    LOCAL_ORIGIN_Z | NON_LOCAL_ORIGIN_Z => {
+                        player.position.z = f32::try_from(&prop.value).unwrap_or_default()
+                    }
+                    LOCAL_EYE_ANGLES | NON_LOCAL_EYE_ANGLES => {
+                        player.view_angle = f32::try_from(&prop.value).unwrap_or_default()
+                    }
+                    LOCAL_PITCH_ANGLES | NON_LOCAL_PITCH_ANGLES => {
+                        player.pitch_angle = f32::try_from(&prop.value).unwrap_or_default()
+                    }
+                    SIMTIME_PROP => {
+                        player.simtime = i64::try_from(&prop.value).unwrap_or_default() as u16
+                    }
+
+                    // Player summary stats:
+
+                    _ => {}
                 }
-                MAX_HEALTH_PROP => {
-                    player.max_health = i64::try_from(&prop.value).unwrap_or_default() as u16
-                }
-                LIFE_STATE_PROP => {
-                    player.state = PlayerState::new(i64::try_from(&prop.value).unwrap_or_default() as u8)
-                }
-                LOCAL_ORIGIN | NON_LOCAL_ORIGIN => {
-                    let pos_xy = VectorXY::from(
-                        TFVecXY::try_from(&prop.value).unwrap_or_default()
-                    );
-                    player.position.x = pos_xy.x;
-                    player.position.y = pos_xy.y;
-                }
-                LOCAL_ORIGIN_Z | NON_LOCAL_ORIGIN_Z => {
-                    player.position.z = f32::try_from(&prop.value).unwrap_or_default()
-                }
-                LOCAL_EYE_ANGLES | NON_LOCAL_EYE_ANGLES => {
-                    player.view_angle = f32::try_from(&prop.value).unwrap_or_default()
-                }
-                LOCAL_PITCH_ANGLES | NON_LOCAL_PITCH_ANGLES => {
-                    player.pitch_angle = f32::try_from(&prop.value).unwrap_or_default()
-                }
-                SIMTIME_PROP => {
-                    player.simtime = i64::try_from(&prop.value).unwrap_or_default() as u16
-                }
-                _ => {}
             }
         }
     }
@@ -443,18 +701,12 @@ impl GameStateAnalyserPlus {
     }
 
     pub fn handle_sentry_entity(&mut self, entity: &PacketEntity, parser_state: &ParserState) {
-        const ANGLE: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[1]");
-        const MINI: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BaseObject", "m_bMiniBuilding");
-        const CONTROLLED: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ObjectSentrygun", "m_bPlayerControlled");
-        const TARGET: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ObjectSentrygun", "m_hAutoAimTarget");
-        const SHELLS: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ObjectSentrygun", "m_iAmmoShells");
-        const ROCKETS: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ObjectSentrygun", "m_iAmmoRockets");
+        const ANGLE: SPI = SPI::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[1]");
+        const MINI: SPI = SPI::new("DT_BaseObject", "m_bMiniBuilding");
+        const CONTROLLED: SPI = SPI::new("DT_ObjectSentrygun", "m_bPlayerControlled");
+        const TARGET: SPI = SPI::new("DT_ObjectSentrygun", "m_hAutoAimTarget");
+        const SHELLS: SPI = SPI::new("DT_ObjectSentrygun", "m_iAmmoShells");
+        const ROCKETS: SPI = SPI::new("DT_ObjectSentrygun", "m_iAmmoRockets");
 
         if entity.update_type == UpdateType::Delete {
             self.state.data.remove_building(entity.entity_index);
@@ -491,18 +743,12 @@ impl GameStateAnalyserPlus {
     }
 
     pub fn handle_teleporter_entity(&mut self, entity: &PacketEntity, parser_state: &ParserState) {
-        const RECHARGE_TIME: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ObjectTeleporter", "m_flRechargeTime");
-        const RECHARGE_DURATION: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ObjectTeleporter", "m_flCurrentRechargeDuration");
-        const TIMES_USED: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ObjectTeleporter", "m_iTimesUsed");
-        const OTHER_END: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ObjectTeleporter", "m_bMatchBuilding");
-        const YAW_TO_EXIT: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ObjectTeleporter", "m_flYawToExit");
-        const IS_ENTRANCE: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BaseObject", "m_iObjectMode");
+        const RECHARGE_TIME: SPI = SPI::new("DT_ObjectTeleporter", "m_flRechargeTime");
+        const RECHARGE_DURATION: SPI = SPI::new("DT_ObjectTeleporter", "m_flCurrentRechargeDuration");
+        const TIMES_USED: SPI = SPI::new("DT_ObjectTeleporter", "m_iTimesUsed");
+        const OTHER_END: SPI = SPI::new("DT_ObjectTeleporter", "m_bMatchBuilding");
+        const YAW_TO_EXIT: SPI = SPI::new("DT_ObjectTeleporter", "m_flYawToExit");
+        const IS_ENTRANCE: SPI = SPI::new("DT_BaseObject", "m_iObjectMode");
 
         if entity.update_type == UpdateType::Delete {
             self.state.data.remove_building(entity.entity_index);
@@ -546,10 +792,8 @@ impl GameStateAnalyserPlus {
     }
 
     pub fn handle_dispenser_entity(&mut self, entity: &PacketEntity, parser_state: &ParserState) {
-        const AMMO: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ObjectDispenser", "m_iAmmoMetal");
-        const HEALING: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ObjectDispenser", "healing_array");
+        const AMMO: SPI = SPI::new("DT_ObjectDispenser", "m_iAmmoMetal");
+        const HEALING: SPI = SPI::new("DT_ObjectDispenser", "healing_array");
 
         if entity.update_type == UpdateType::Delete {
             self.state.data.remove_building(entity.entity_index);
@@ -593,19 +837,15 @@ impl GameStateAnalyserPlus {
             .state.data
             .get_or_create_building(entity.entity_index, class);
 
-        const LOCAL_ORIGIN: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BaseEntity", "m_vecOrigin");
-        const TEAM: SendPropIdentifier = SendPropIdentifier::new("DT_BaseEntity", "m_iTeamNum");
-        const ANGLE: SendPropIdentifier = SendPropIdentifier::new("DT_BaseEntity", "m_angRotation");
-        const SAPPED: SendPropIdentifier = SendPropIdentifier::new("DT_BaseObject", "m_bHasSapper");
-        const BUILDING: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BaseObject", "m_bBuilding");
-        const LEVEL: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BaseObject", "m_iUpgradeLevel");
-        const BUILDER: SendPropIdentifier = SendPropIdentifier::new("DT_BaseObject", "m_hBuilder");
-        const MAX_HEALTH: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BaseObject", "m_iMaxHealth");
-        const HEALTH: SendPropIdentifier = SendPropIdentifier::new("DT_BaseObject", "m_iHealth");
+        const LOCAL_ORIGIN: SPI = SPI::new("DT_BaseEntity", "m_vecOrigin");
+        const TEAM: SPI = SPI::new("DT_BaseEntity", "m_iTeamNum");
+        const ANGLE: SPI = SPI::new("DT_BaseEntity", "m_angRotation");
+        const SAPPED: SPI = SPI::new("DT_BaseObject", "m_bHasSapper");
+        const BUILDING: SPI = SPI::new("DT_BaseObject", "m_bBuilding");
+        const LEVEL: SPI = SPI::new("DT_BaseObject", "m_iUpgradeLevel");
+        const BUILDER: SPI = SPI::new("DT_BaseObject", "m_hBuilder");
+        const MAX_HEALTH: SPI = SPI::new("DT_BaseObject", "m_iMaxHealth");
+        const HEALTH: SPI = SPI::new("DT_BaseObject", "m_iHealth");
 
         match building {
             Building::Sentry(Sentry {

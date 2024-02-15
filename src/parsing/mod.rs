@@ -19,7 +19,7 @@ pub mod datacollection;
 pub mod internals;
 
 // INCLUDES
-use super::types::game::entities::World;
+use super::types::game::World;
 use super::types::demo::DemoData;
 
 use self::datacollection::GameStateAnalyserPlus;
@@ -125,6 +125,7 @@ impl ParseWorker {
                     // Update the rounds in our results. Copy is just simpler.
                     result_data.rounds = state.rounds.clone();
                     result_data.kills.extend(state.kills.clone());
+                    result_data.point_captures.extend(state.captures.clone());
                     result_data.tick_states.insert(u32::from(state.data.tick), state.data.clone());
 
                     // Update draw data
@@ -135,6 +136,7 @@ impl ParseWorker {
                     
                     for player in &state.data.players {
                         draw_data.player_at_max.stretch_to_include(player.position);
+                        result_data.player_reach_bounds.stretch_to_include(player.position);
                     }
                 }
 

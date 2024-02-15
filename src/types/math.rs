@@ -10,6 +10,19 @@ use tf_demo_parser::demo::vector::{Vector as TFVector, VectorXY as TFVectorXY};
 
 pub const ZERO_EPSILON_F32: f32 = 0.001;
 
+/// This function is used by lib.rs, but the IDE thinks it's unused.
+#[allow(dead_code)]
+pub(crate) fn get_submod(
+    py: Python<'_>,
+) -> PyResult<&PyModule> {
+    let module = PyModule::new(py, "math")?;
+
+    module.add_class::<Vector>()?;
+    module.add_class::<VectorXY>()?;
+
+    Ok(module)
+}
+
 // todo: serialize, deserialize, bitread, bitwrite ?
 #[pyclass(get_all, set_all)]
 #[derive(BitRead, BitWrite, Debug, Clone, Copy, Default)]

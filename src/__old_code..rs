@@ -628,3 +628,255 @@ self.data_transmitter.as_ref().unwrap().do_any_req(|| {
 
 //     has_combo: bool,
 // }
+
+
+////////////////////////////
+
+// The following was when I was trying to make python imports work just like
+// how they should with subsubsubmodules, but to no avail.
+
+pub(self) fn register_submodule<F>(
+    py: Python<'_>,
+    sysmods: &PyAny,
+    parent: &PyModule,
+    child_name: &str,
+    add_fn: F,
+) -> PyResult<()> where 
+    F: FnOnce(Python<'_>, &PyAny, &PyModule, &String) -> PyResult<()>
+{
+    let child_mod = PyModule::new(py, child_name)?;
+    let child_mod_name = format!("{}.{}", parent.name()?, child_name);
+    
+    add_fn(py, sysmods, child_mod, &child_mod_name)?;
+
+    parent.add_submodule(child_mod)?;
+    sysmods.set_item(child_mod_name.as_str(), child_mod)?;
+
+    Ok(())
+}
+
+pub(self) struct TypeRegistrar<'a> {
+    py: Python<'a>,
+    sysmods: &'a PyAny,
+    going_name: String,
+    module: &'a PyModule,
+}
+
+pub(self) struct SubmodRegFn<'a>(pub Box<dyn FnOnce(&TypeRegistrar<'a>) -> PyResult<()>>);
+
+impl<'a> SubmodRegFn<'a>{
+    pub fn from<T>(value: T) -> Self 
+    where
+        T: FnOnce(&TypeRegistrar<'a>) -> PyResult<()> + 'static
+    {
+        SubmodRegFn(Box::new(value))
+    }
+} 
+
+#[allow(dead_code)]
+impl TypeRegistrar<'_> {
+    fn new<'a>(py: Python<'a>, sysmods: &'a PyAny, module: &'a PyModule) -> PyResult<TypeRegistrar<'a>>
+    {
+        println!("TypeRegistrar::new called with now going name {}", module.name()?.to_string());
+
+        Ok(TypeRegistrar{
+            py,
+            sysmods,
+            going_name: module.name()?.to_string(),
+            module,
+        })
+    }
+
+    pub fn child<'a, AddFn>(
+        parent: &TypeRegistrar<'a>,
+        name: &str,
+        add_fn: AddFn,
+        submod_reg_fn: Option<SubmodRegFn<'a>>,
+    ) -> PyResult<TypeRegistrar<'a>> where
+        AddFn: FnOnce(&PyModule) -> PyResult<()>
+    {
+        
+        let module = PyModule::new(parent.py, name)?;
+        let going_name = format!("{}.{}", parent.going_name, name);
+        println!("TypeRegistrar::child called with now going name {}", going_name);
+
+        add_fn(module)?;
+
+        let registrar = TypeRegistrar {
+            py: parent.py,
+            sysmods: parent.sysmods,
+            going_name,
+            module
+        };
+
+        if let Some(reg_fn) = submod_reg_fn {
+            reg_fn.0(&registrar)?;
+        }
+
+        Ok(registrar)
+    }
+
+    pub fn register_submodule<'a, F>(&'a self, reg_fn: F) -> PyResult<()>
+    where
+        F: FnOnce(&TypeRegistrar<'a>) -> PyResult<TypeRegistrar<'a>>
+    {
+        let child_reg = reg_fn(self)?;
+
+        self.module.add_submodule(child_reg.module)?;
+        self.sysmods.set_item(child_reg.going_name.as_str(), child_reg.module)?;
+        child_reg.module.setattr("__name__", child_reg.going_name.as_str())?;
+        child_reg.module.setattr("__package__", self.going_name.as_str())?;
+        
+        println!("TypeRegistrar::register_submodule:");
+        println!("-- finished adding {}", child_reg.going_name);
+        println!("-- package is now {}", self.going_name);
+        Ok(())
+    }
+}
+
+
+use pyo3::{Python, PyResult, PyAny, types::PyModule};
+
+#[allow(dead_code)]
+pub(super) fn register_types(py: Python<'_>, lib_module: &PyModule) -> PyResult<()> {
+    let sysmods = py.import("sys")?.getattr("modules")?;
+
+    let registrar = TypeRegistrar::new(py, sysmods, lib_module)?;
+
+    registrar.register_submodule(game::get_submod_registrar)?;
+    registrar.register_submodule(math::get_submod_registrar)?;
+    registrar.register_submodule(demo::get_submod_registrar)?;
+    
+    //register_submodule(py, sysmods, lib_module, "math", math::register_submod)?;
+    //register_submodule(py, sysmods, lib_module, "demo", demo::register_submod)?;
+    //register_submodule(py, sysmods, lib_module, "game", game::register_submod)?;
+
+    Ok(())
+}
+
+use super::TypeRegistrar;
+pub(super) fn get_submod_registrar<'a>(parent: &TypeRegistrar<'a>) -> PyResult<TypeRegistrar<'a>> {
+    TypeRegistrar::child(parent, "math",
+        |module| {
+            module.add_class::<Vector>()?;
+            module.add_class::<VectorXY>()?;
+            Ok(())
+        },
+        None
+    )
+}
+
+use super::TypeRegistrar;
+pub(super) fn get_submod_registrar<'a>(parent: &TypeRegistrar<'a>) -> PyResult<TypeRegistrar<'a>> {
+    TypeRegistrar::child(parent, "math",
+        |module| {
+            module.add_class::<TickData>()?;
+            module.add_class::<DemoData>()?;
+            Ok(())
+        },
+        None
+    )
+}
+
+
+use super::TypeRegistrar;
+pub(super) fn get_submod_registrar<'a>(parent: &TypeRegistrar<'a>) -> PyResult<TypeRegistrar<'a>> {
+    TypeRegistrar::child(parent, "events",
+        |module| {
+            module.add_class::<World>()?;
+            module.add_class::<UserInfo>()?;
+            module.add_class::<PlayerState>()?;
+            module.add_class::<Player>()?;
+            module.add_class::<Sentry>()?;
+            module.add_class::<Dispenser>()?;
+            module.add_class::<Teleporter>()?;
+            module.add_class::<Medigun>()?;
+            Ok(())
+        },
+        None
+    )
+}
+
+// this function is used in game::mod.rs but rust_analyzer thinks not
+#[allow(dead_code)]
+pub fn register_with(py: Python<'_>, module: &PyModule) -> PyResult<()> {
+    let ent_mod = PyModule::new(py, "entities")?;
+
+    module.add_class::<World>()?;
+    module.add_class::<UserInfo>()?;
+    module.add_class::<PlayerState>()?;
+    ent_mod.add_class::<Player>()?;
+    ent_mod.add_class::<Sentry>()?;
+    ent_mod.add_class::<Dispenser>()?;
+    ent_mod.add_class::<Teleporter>()?;
+    ent_mod.add_class::<Medigun>()?;
+
+    module.add_submodule(ent_mod)?;
+
+    py.import("sys")?
+        .getattr("modules")?
+        .set_item("tf2dal.entities", ent_mod)?;
+
+    ent_mod.setattr("__name__", "tf2dal.entities")?;
+
+    Ok(())
+}
+
+use super::TypeRegistrar;
+pub(super) fn get_submod_registrar<'a>(parent: &TypeRegistrar<'a>) -> PyResult<TypeRegistrar<'a>> {
+    TypeRegistrar::child(parent, "events",
+        |module| {
+            module.add_class::<Kill>()?;
+            module.add_class::<Capture>()?;
+            module.add_class::<Ubercharge>()?;
+            Ok(())
+        },
+        None
+    )
+}
+
+pub fn register_with(py: Python<'_>, module: &PyModule) -> PyResult<()> {
+    let child = PyModule::new(py, "events")?;
+    child.add_class::<Kill>()?;
+
+    module.add_submodule(child)?;
+    Ok(())
+}
+
+
+pub(self) use super::{TypeRegistrar, SubmodRegFn};
+pub(super) fn get_submod_registrar<'a>(parent: &TypeRegistrar<'a>) -> PyResult<TypeRegistrar<'a>> {
+    TypeRegistrar::child(parent, "game",
+        |module| {
+            module.add_class::<Class>()?;
+            module.add_class::<Team>()?;
+            module.add_class::<ClassList>()?;
+            module.add_class::<ClassListIter>()?;
+            module.add_class::<Round>()?;
+            Ok(())
+        },
+        Some(SubmodRegFn::from(|registrar| {
+            registrar.register_submodule(entities::get_submod_registrar)?;
+            registrar.register_submodule(events::get_submod_registrar)?;
+            Ok(())
+        })))
+}
+
+pub(super) fn register_submod(py: Python<'_>,
+    sysmods: &PyAny,
+    module: &PyModule,
+    mod_name: &String
+) -> PyResult<()> {
+    use super::register_submodule;
+
+    module.add_class::<Class>()?;
+    module.add_class::<Team>()?;
+    module.add_class::<ClassList>()?;
+    module.add_class::<ClassListIter>()?;
+    module.add_class::<Round>()?;
+
+    register_submodule(py, sysmods, module, "entities", entities::register_submod)?;
+    register_submodule(py, sysmods, module, "events", events::register_submod)?;
+
+    Ok(())
+}
