@@ -365,6 +365,14 @@ impl GameStateAnalyserPlus {
             }
 
             // Player related
+            GameEvent::PlayerSpawn(event) => {
+                if let Some(player) = self.state.data.mut_player_by_userid(event.user_id) {
+                    player.time_since_last_hurt = 15.0;
+                    player.class = Class::new(event.class);
+                    player.team = Team::new(event.team);
+                }
+            }
+
             GameEvent::PlayerDeath(event) => {
                 self.state.kills.push(Kill::from_event(tick, event));
             }

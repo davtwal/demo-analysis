@@ -1,6 +1,7 @@
 
 use itertools::Itertools;
 use pyo3::prelude::*;
+use pyo3::pyclass::CompareOp;
 
 use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
@@ -69,8 +70,9 @@ use tf_demo_parser::demo::parser::analyser::{Class as TFClass, ClassList as TFCL
 
 // missing: serde, fromstr
 /// Representation of each class in the game as an enum.
+use std::hash::Hash;
 #[pyclass]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive, IntoPrimitive, Default)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, TryFromPrimitive, IntoPrimitive, Default)]
 #[repr(u8)]
 pub enum Class {
     #[default]
@@ -101,11 +103,31 @@ impl Class {
     }
 }
 
+use std::hash::Hasher;
+use std::collections::hash_map::DefaultHasher;
+
 #[pymethods]
 impl Class{
     #[new]
     fn new_py(n: u8) -> Self {
         Self::new(n)
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn __richcmp__(&self, other: &Self, comp: CompareOp) -> Self {
+        match comp {
+            CompareOp::Eq => *{if self == other {self} else {other}},
+            CompareOp::Ge => *{if self >= other {self} else {other}},
+            CompareOp::Gt => *{if self >  other {self} else {other}},
+            CompareOp::Le => *{if self <= other {self} else {other}},
+            CompareOp::Lt => *{if self <  other {self} else {other}},
+            CompareOp::Ne => *{if self != other {self} else {other}},
+        }
     }
 }
 
@@ -226,7 +248,7 @@ impl ClassListIter {
 /// /////////////////////////////////////////
 
 #[pyclass]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive, IntoPrimitive, Default)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, TryFromPrimitive, IntoPrimitive, Default)]
 #[repr(u8)]
 pub enum Team {
     #[default]
@@ -266,6 +288,23 @@ impl Team {
 
     pub fn is_player(&self) -> bool {
         *self == Team::Red || *self == Team::Blue
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn __richcmp__(&self, other: &Self, comp: CompareOp) -> Self {
+        match comp {
+            CompareOp::Eq => *{if self == other {self} else {other}},
+            CompareOp::Ge => *{if self >= other {self} else {other}},
+            CompareOp::Gt => *{if self >  other {self} else {other}},
+            CompareOp::Le => *{if self <= other {self} else {other}},
+            CompareOp::Lt => *{if self <  other {self} else {other}},
+            CompareOp::Ne => *{if self != other {self} else {other}},
+        }
     }
 }
 

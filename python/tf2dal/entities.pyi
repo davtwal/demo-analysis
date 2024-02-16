@@ -8,7 +8,7 @@ from numpy import uint16, float32, uint8
 from enum import Enum
 
 from .math      import Vector
-from .entities  import Team, Class, ClassList
+from .game      import Team, Class, ClassList
 from .          import EntityID, UserID, DemoTick
 
 class UserInfo:
@@ -28,7 +28,8 @@ class UserInfo:
     def entity_id(self) -> EntityID: ...
 
     @property
-    def team(self) -> Team: ...
+    def team(self) -> Team: 
+        """Same as Player.team"""
 
 class PlayerState(Enum):
     """Life state of a player. Just use Player.is_alive."""
@@ -47,9 +48,16 @@ class Player:
     @property
     def max_health(self) -> uint16: ...
     @property
-    def player_class(self) -> Class: ...
+    def player_class(self) -> Class: 
+        """What class they're currently playing."""
     @property
-    def team(self) -> Team:...
+    def team(self) -> Team: 
+        """The team the player is on. Can be any of:
+         
+        - Other (0): Used for non-player entities.
+        - Spectator (1)
+        - Red (2)
+        - Blue (3)"""
 
     @property
     def view_angle(self) -> float32:
