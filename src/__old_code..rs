@@ -301,6 +301,7 @@ impl<'a, E: Endianness> BitRead<'a, E> for Building {
     #[pyfn(m)]
     fn get_demo_data() -> PyResult<DemoData> {
         let mut data = Vec::new();
+        
         println!("(py) get demo data");
     
         let mut readstrm = send_get(&mut data, u32::MAX)?;

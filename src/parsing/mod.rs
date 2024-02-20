@@ -81,76 +81,146 @@ pub struct ParseDrawInfo {
     pub player_at_max: World
 }
 
+pub fn parse_demo(fpath: PathBuf, mut progress_reporter: impl FnMut(ParseProgressReport) -> Result<(), ParseWorkerError>)
+{
+    use ParseProgressReport::*;
+    let mut error_catch = || -> Result<(), ParseWorkerError> {
+        let mut seen_zero = false;
+        let file = std::fs::read(fpath.clone())?;
+        let demo = tf_demo_parser::Demo::new(&file);
+
+        let parser = DemoParser::new_all_with_analyser(
+            demo.get_stream(),
+            GameStateAnalyserPlus::new()
+        );
+
+        let (header, mut ticker) = parser.ticker()?;
+
+        let mut result_data = DemoData {
+            demo_filename: fpath.clone(),
+            map_name: header.map,
+            duration: header.duration,
+            ..Default::default()
+        };
+
+        progress_reporter(Info(header.ticks))?;
+
+        let mut draw_data = ParseDrawInfo::default();
+
+        while ticker.tick()? {
+            let state = ticker.state();
+            if state.data.tick <= 10 {
+                seen_zero = true;
+            }
+
+            if seen_zero {
+                progress_reporter(Working(u32::from(state.data.tick)))?;
+            }
+
+            // Update the rounds in our results. Copy is just simpler.
+            result_data.rounds = state.rounds.clone();
+            result_data.kills.extend(state.kills.clone());
+            result_data.point_captures.extend(state.captures.clone());
+            result_data.tick_states.insert(u32::from(state.data.tick), state.data.clone());
+
+            // Update draw data
+            // TODO: Max projectiles
+            if let Some(world) = &state.world {
+                draw_data.world_max = draw_data.world_max.adjoin_bounds(world);
+            }
+                    
+            for player in &state.data.players {
+                draw_data.player_at_max.stretch_to_include(player.position);
+                result_data.player_reach_bounds.stretch_to_include(player.position);
+            }
+        }
+
+        // deliberate lack of ?
+        // we want the done() to be the last thing we could potentially send
+        progress_reporter(Done(result_data, draw_data)).map_err(|e| ParseWorkerError::from(e))
+    };
+
+    if let Err(err) = error_catch() {
+        let _ = progress_reporter(Error(err));
+    }
+}
+
 impl ParseWorker {
     pub fn new(fpath: PathBuf) -> std::io::Result<Self> {
-        log::info!("Beginning parse: {:?}", fpath.clone());
+        log::debug!("Beginning multithreaded parse: {:?}", fpath.clone());
 
         let (prog_send, prog_recv) = mpsc::channel::<ParseProgressReport>();
 
-        let handle = thread::spawn(move || {
-            use ParseProgressReport::*;
-            let error_catch = || -> Result<(), ParseWorkerError> {
-                let mut seen_zero = false;
-                let file = std::fs::read(fpath.clone())?;
-                let demo = tf_demo_parser::Demo::new(&file);
-
-                let parser = DemoParser::new_all_with_analyser(
-                    demo.get_stream(),
-                    GameStateAnalyserPlus::new()
-                );
-
-                let (header, mut ticker) = parser.ticker()?;
-
-                let mut result_data = DemoData {
-                    demo_filename: fpath.clone(),
-                    map_name: header.map,
-                    duration: header.duration,
-                    ..Default::default()
-                };
-
-                prog_send.send(Info(header.ticks))?;
-
-                let mut draw_data = ParseDrawInfo::default();
-
-                while ticker.tick()? {
-                    let state = ticker.state();
-                    if state.data.tick <= 10 {
-                        seen_zero = true;
-                    }
-
-                    if seen_zero {
-                        prog_send.send(Working(u32::from(state.data.tick)))?;
-                    }
-
-                    // Update the rounds in our results. Copy is just simpler.
-                    result_data.rounds = state.rounds.clone();
-                    result_data.kills.extend(state.kills.clone());
-                    result_data.point_captures.extend(state.captures.clone());
-                    result_data.tick_states.insert(u32::from(state.data.tick), state.data.clone());
-
-                    // Update draw data
-                    // TODO: Max projectiles
-                    if let Some(world) = &state.world {
-                        draw_data.world_max = draw_data.world_max.adjoin_bounds(world);
-                    }
-                    
-                    for player in &state.data.players {
-                        draw_data.player_at_max.stretch_to_include(player.position);
-                        result_data.player_reach_bounds.stretch_to_include(player.position);
-                    }
-                }
-
-                // deliberate lack of ?
-                // we want the done() to be the last thing we could potentially send
-                prog_send.send(Done(result_data, draw_data)).map_err(|e| ParseWorkerError::from(e))
-
-                //Ok(())
-            };
-
-            if let Err(err) = error_catch() {
-                let _ = prog_send.send(Error(err));
+        let handle = thread::spawn(move || parse_demo(
+            fpath, |report| {
+                prog_send.send(report)?; Ok(())
             }
-        });
+        ));
+
+        // let handle = thread::spawn(move || {
+        //     use ParseProgressReport::*;
+        //     let error_catch = || -> Result<(), ParseWorkerError> {
+        //         let mut seen_zero = false;
+        //         let file = std::fs::read(fpath.clone())?;
+        //         let demo = tf_demo_parser::Demo::new(&file);
+
+        //         let parser = DemoParser::new_all_with_analyser(
+        //             demo.get_stream(),
+        //             GameStateAnalyserPlus::new()
+        //         );
+
+        //         let (header, mut ticker) = parser.ticker()?;
+
+        //         let mut result_data = DemoData {
+        //             demo_filename: fpath.clone(),
+        //             map_name: header.map,
+        //             duration: header.duration,
+        //             ..Default::default()
+        //         };
+
+        //         prog_send.send(Info(header.ticks))?;
+
+        //         let mut draw_data = ParseDrawInfo::default();
+
+        //         while ticker.tick()? {
+        //             let state = ticker.state();
+        //             if state.data.tick <= 10 {
+        //                 seen_zero = true;
+        //             }
+
+        //             if seen_zero {
+        //                 prog_send.send(Working(u32::from(state.data.tick)))?;
+        //             }
+
+        //             // Update the rounds in our results. Copy is just simpler.
+        //             result_data.rounds = state.rounds.clone();
+        //             result_data.kills.extend(state.kills.clone());
+        //             result_data.point_captures.extend(state.captures.clone());
+        //             result_data.tick_states.insert(u32::from(state.data.tick), state.data.clone());
+
+        //             // Update draw data
+        //             // TODO: Max projectiles
+        //             if let Some(world) = &state.world {
+        //                 draw_data.world_max = draw_data.world_max.adjoin_bounds(world);
+        //             }
+                    
+        //             for player in &state.data.players {
+        //                 draw_data.player_at_max.stretch_to_include(player.position);
+        //                 result_data.player_reach_bounds.stretch_to_include(player.position);
+        //             }
+        //         }
+
+        //         // deliberate lack of ?
+        //         // we want the done() to be the last thing we could potentially send
+        //         prog_send.send(Done(result_data, draw_data)).map_err(|e| ParseWorkerError::from(e))
+
+        //         //Ok(())
+        //     };
+
+        //     if let Err(err) = error_catch() {
+        //         let _ = prog_send.send(Error(err));
+        //     }
+        // });
 
         Ok(ParseWorker {
             handle,

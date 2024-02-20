@@ -10,9 +10,50 @@ use itertools::enumerate;
 use itertools::Itertools;
 use tf_demo_parser::MessageType;
 
+use log::{info, error};
+
 use crate::types::demo::DemoData;
 
-pub fn do_parses(fnames: Vec<PathBuf>) -> io::Result<Vec<(PathBuf, DemoData)>> {
+fn parse_singlethread(fnames: Vec<PathBuf>) -> io::Result<Vec<(PathBuf, DemoData)>> {
+    info!("Single threaded parse!");
+    let mut parse_results = Vec::new();
+    for fname in fnames {
+        let mut max_ticks = 0;
+        let mut last_perc_printed = 0;
+        par::parse_demo(fname.clone(), |prog_rep| {
+            match prog_rep {
+                par::ParseProgressReport::Info(max_tick) => {
+                    info!("({:#?}) Max Ticks: {}", fname.file_name().unwrap(), max_tick);
+                    max_ticks = max_tick;
+                },
+                par::ParseProgressReport::Error(err) => {
+                    error!("({:#?}) Error: {:?}", fname.file_name().unwrap(), err);
+                },
+                par::ParseProgressReport::Working(tick) => {
+                    let perc = (tick * 100) / max_ticks;
+                    if perc > last_perc_printed && perc % 5 == 0 {
+                        last_perc_printed = perc;
+                        info!("({:#?}) {}%", fname.file_name().unwrap(), perc);
+                    }
+                },
+                par::ParseProgressReport::Done(data, _) => {
+                    parse_results.push((fname.clone(), data));
+                },
+                _ => {}
+            }
+
+            Ok(())
+        });
+    }
+
+    Ok(parse_results)
+}
+
+pub fn do_parses(fnames: Vec<PathBuf>, multithread: bool) -> io::Result<Vec<(PathBuf, DemoData)>> {
+    if !multithread {
+        return parse_singlethread(fnames);
+    }
+
     let mut workers = Vec::new();
     for f in fnames {
         workers.push((f.clone(), par::ParseWorker::new(f)?, u32::MAX, 0));
@@ -26,11 +67,11 @@ pub fn do_parses(fnames: Vec<PathBuf>) -> io::Result<Vec<(PathBuf, DemoData)>> {
             if let Some(prog_rep) = worker.get_most_recent() {
                 match prog_rep {
                     par::ParseProgressReport::Info(max_tick) => {
-                        println!("({:#?}) Max Ticks: {}", fname.file_name().unwrap(), max_tick);
+                        info!("({:#?}) Max Ticks: {}", fname.file_name().unwrap(), max_tick);
                         *max_ticks = max_tick;
                     },
                     par::ParseProgressReport::Error(err) => {
-                        println!("({:#?}) Error: {:?}", fname.file_name().unwrap(), err);
+                        error!("({:#?}) Error: {:?}", fname.file_name().unwrap(), err);
                         *perc_done = 100;
                         done_count += 1;
                     },
@@ -48,7 +89,7 @@ pub fn do_parses(fnames: Vec<PathBuf>) -> io::Result<Vec<(PathBuf, DemoData)>> {
     
         for (i, (fname, _, _, perc_done)) in enumerate(&workers) {
             if perc_done % 10 == 0 && perc_done > last_report.get(i).unwrap(){
-                println!("({:#?}) {}%", fname.file_name().unwrap(), perc_done);
+                info!("({:#?}) {}%", fname.file_name().unwrap(), perc_done);
                 last_report[i] = *perc_done;
             }
         }
@@ -75,21 +116,19 @@ fn pause() {
 
 #[allow(dead_code)]
 pub fn run(fnames: Vec<PathBuf>, do_analysis: bool) -> io::Result<()> {
-    println!("###############################");
-    println!("# Beginning Parse: {:?}", fnames);
-    
-    
+    info!("###############################");
+    info!("# Beginning Parse: {:?}", fnames);
 
     if do_analysis {
-        println!("# (with analysis!)");
+        info!("# (with analysis!)");
 
-        let parse_results = do_parses(fnames)?;
+        let parse_results = do_parses(fnames, true)?;
 
-        println!("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
-        println!("| Starting analysis with pyo3...");
+        info!("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+        info!("| Starting analysis with pyo3...");
 
         for (fname, demodata) in &parse_results {
-            println!("| Analyzing: {:#?}", fname.file_name().unwrap().to_str());
+            info!("| Analyzing: {:#?}", fname.file_name().unwrap().to_str());
             dt::launch_demo_analysis(demodata);
         }
     }

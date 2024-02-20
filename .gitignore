@@ -2,6 +2,8 @@
 *.dem
 *.pyd
 .ipynb_checkpoints/
+Cargo.lock
+todo.txt
 
 # output of kmapper, it's bige
 python/kmapper_out

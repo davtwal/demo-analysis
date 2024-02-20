@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::str::FromStr;
 
+use log::debug;
 use tf_demo_parser::{
     MessageType, ParserState, ReadResult, Stream,
     demo::{
@@ -387,7 +388,7 @@ impl GameStateAnalyserPlus {
                 if let Some(patient) = self.state.data.get_player_by_userid(event.patient) {
                     if let Some(healer) = self.state.data.get_player_by_userid(event.healer) {
                         if patient.team != healer.team || healer.class != Class::Medic {
-                            println!("NOTE: weird player healed: pat/heal team {:?} {:?}, heal class {:?}",
+                            debug!("NOTE: weird player healed: pat/heal team {:?} {:?}, heal class {:?}",
                                     patient.team, healer.team, healer.class);
                         }
                         else {
@@ -396,7 +397,7 @@ impl GameStateAnalyserPlus {
                     }
                 }
                 else {
-                    println!("player healed with invalid patient");
+                    debug!("player healed with invalid patient");
                 }
             }
             GameEvent::PlayerChargeDeployed(event) => {
@@ -600,7 +601,7 @@ impl GameStateAnalyserPlus {
                             "m_iPlayerClass" => {
                                 player.class =
                                     Class::new(i64::try_from(&prop.value).unwrap_or_default());
-                                println!("updated player {} class to {:?}", player.info.as_ref().unwrap().user_id, player.class);
+                                log::trace!("updated player {} class to {:?}", player.info.as_ref().unwrap().user_id, player.class);
                                 player.class_info = ClassInfo::from(player.class).ok();
                             }
                             "m_iChargeLevel" => {

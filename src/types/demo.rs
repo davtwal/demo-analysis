@@ -130,6 +130,11 @@ impl TickData {
 
 #[pymethods]
 impl TickData {
+    #[staticmethod]
+    fn empty_player() -> Player {
+        Player::default()
+    }
+
     #[getter]
     fn sentries(&self) -> HashMap<u32, Sentry> {
         let mut hash = HashMap::<u32, Sentry>::default();

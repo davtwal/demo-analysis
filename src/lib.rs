@@ -16,9 +16,11 @@ use types::demo::DemoData;
 /// Adds all of the types to the python library.
 #[pymodule]
 fn tf2dal(py: Python<'_>, m: &PyModule) -> PyResult<()> {
+    pyo3_log::init();
+
     #[pyfn(m)]
     fn load_demo(fname: PathBuf) -> PyResult<DemoData> {
-        Ok(crate::app::do_parses(vec![fname])?
+        Ok(crate::app::do_parses(vec![fname], false)?
             .get(0).ok_or(
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, "could not find demo file")
             )?.to_owned().1 // Could potentially avoid the .to_owned here?

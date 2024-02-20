@@ -82,7 +82,7 @@ impl Shader {
                             gl.attach_shader(program, *shader);
                         },
                         Err(e) => {
-                            println!("{}", e);
+                            log::error!("shader error: {}", e);
                             had_error = true;
                         }
                     }
@@ -93,7 +93,7 @@ impl Shader {
                 gl.link_program(program);
 
                 if gl.get_program_link_status(program) == false {
-                    println!("Could not link program: {}", gl.get_program_info_log(program));
+                    log::error!("Could not link program: {}", gl.get_program_info_log(program));
                     had_error = true;
                 }
             }
