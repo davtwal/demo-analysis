@@ -10,3 +10,4 @@ pub mod game;
 pub mod demo;
 pub mod entities;
 pub mod events;
+pub mod analysis;

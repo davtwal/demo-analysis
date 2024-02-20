@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use crate::types::demo::TickData;
 use crate::types::game::{Class, Team};
-use crate::types::game::entities::{Player, PlayerState};
+use crate::types::entities::{Player, PlayerState};
 use crate::types::math::Vector;
 
 #[derive(Debug, Clone, Default)]
@@ -236,7 +236,7 @@ impl From<&TickData> for TickAnalysisData {
 
 //pub mod sums;
 //pub mod data;
-pub mod grouping;
+//pub mod grouping;
 
 pub mod data;
 

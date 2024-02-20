@@ -2,8 +2,9 @@ from numpy import uint32, uint16, float32, uint8
 from typing import List, Dict
 from enum import Enum
 
-from demo_analysis_lib import Team, Vector
-from demo_analysis_lib.entities import Player
+from tf2dal.game import Team
+from tf2dal.math import Vector
+from tf2dal.entities import Player
 
 class TickPlayerData:
     """Analysis data for a single player during a single tick."""

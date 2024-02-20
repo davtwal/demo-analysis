@@ -5,15 +5,16 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use crate::types::game::{Team, Class};
-use crate::types::game::entities::Player;
+use crate::types::entities::Player;
 use crate::types::demo::TickData;
 use crate::types::math::Vector;
 
 #[derive(Debug, Clone)]
 pub struct TickPlayerData<'a> {
     pub player: &'a Player,
+    pub time_since_last_hit: f32,
     pub dist_from_team_avg: f32,
-    pub dist_from_group_avg: f32,
+    //pub dist_from_group_avg: f32,
     pub dist_from_medic: f32,
 }
 
@@ -22,41 +23,27 @@ pub struct TickPlayerData<'a> {
 pub struct TickPlayerDataPy {
     pub entity_id: u32,
     pub user_id: u16,
+    pub time_since_last_hit: f32,
     pub dist_from_team_avg: f32,
-    pub dist_from_group_avg: f32,
+    //pub dist_from_group_avg: f32,
     pub dist_from_medic: f32,
 }
 
 impl IntoPy<TickPlayerDataPy> for TickPlayerData<'_> {
     fn into_py(self, _py: Python<'_>) -> TickPlayerDataPy {
+        let entity_id = self.player.info.as_ref().expect("x").entity_id;
+        let user_id = self.player.info.as_ref().expect("x").user_id;
         TickPlayerDataPy {
-            entity_id: self.player.info.clone().unwrap().entity_id,
-            user_id: self.player.info.clone().unwrap().user_id,
-            dist_from_group_avg: self.dist_from_group_avg,
+            entity_id,
+            user_id,
+            time_since_last_hit: self.time_since_last_hit,
+            //dist_from_group_avg: self.dist_from_group_avg,
             dist_from_medic: self.dist_from_medic,
             dist_from_team_avg: self.dist_from_team_avg,
         }
     }
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Default)]
-#[repr(u8)]
-pub enum GroupingType {
-    #[default]
-    None = 0,           // Not valid
-	Isolated = 1,   	// (1)  Only one player.
-	IsolatedCombo = 2,  // (2)  Contains the medic and one other players.
-	Combo = 3,      	// (3+) Contains the medic and at least two other players.
-	Flank = 4,      	// (2+) Does not contain the medic, but has at least two players.
-}
-
-#[derive(Default, Debug, Clone)]
-pub struct TickPlayerGrouping<'a> {
-    pub group_type: GroupingType,
-    pub players: Vec<&'a Player>,
-    pub avg_pos: Vector,
-}
 
 #[derive(Default, Debug, Clone)]
 pub struct TickTeamAnalysis<'a> {
@@ -111,7 +98,8 @@ impl<'a> TickTeamAnalysis<'a> {
         for player in playerlist {
             playerdata.insert(player.info.as_ref().unwrap().user_id, TickPlayerData {
                 player: &player,
-                dist_from_group_avg: 0f32, // TODO
+                //dist_from_group_avg: 0f32, // TODO
+                time_since_last_hit: 0f32, // TODO
                 dist_from_medic: match medic {Some(m) => player.distance_from(m), None=> -1f32},
                 dist_from_team_avg: player.position.dist_to(&avg_position),
             });
