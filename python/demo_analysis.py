@@ -4,13 +4,14 @@
 # Do not change this name! Otherwise this won't work!
 if __name__ == "demoanalysis":
     import os, sys
-    sys.path.append(os.getcwd() + "/python/demo_analysis_lib")
-    from demo_analysis_lib import entities as ent, events as evt
-    import demo_analysis_lib as dal
+    sys.path.append(os.getcwd() + "/python/tf2dal")
+    # Pylance will say entities / events can't be resolved. Ignore.
+    from tf2dal import entities as ent, events as evt, demo #type: ignore
+    import tf2dal as dal
 
 else:
-    from demo_analysis_lib import entities as ent, events as evt
-    import demo_analysis_lib as dal
+    from tf2dal import entities as ent, events as evt, demo #type: ignore
+    import tf2dal as dal
 
 ## GROUPING
 from enum import Enum
@@ -63,12 +64,12 @@ class TickAnalysis:
 from numpy import float32
 
 # Called by the executable. DON'T CHANGE THIS FUNCTION'S NAME OR ARGUMENTS!
-def demo_analysis_main(data: dal.DemoData):
+def demo_analysis_main(data: demo.DemoData):
     print("We got there!")
     print(data.demo_filename)
 
 # Called by the executable. DON'T CHANGE THIS FUNCTION'S NAME OR ARGUMENTS!
-def tick_analysis_main(tick: dal.TickData):
+def tick_analysis_main(tick: demo.TickData):
     print("Tick main")
     print(tick.tick)
 

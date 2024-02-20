@@ -4,6 +4,7 @@
 use std::hash::Hash;
 use std::thread::{self, JoinHandle};
 
+//use itertools::{Itertools, Update};
 use tf_demo_parser::demo::data::DemoTick;
 use tf_demo_parser::demo::gamevent::{GameEvent, GameEventType};
 use tf_demo_parser::demo::header::Header;
@@ -222,26 +223,52 @@ use std::collections::{HashSet, HashMap};
 
 pub enum GatherSeen {
     Header(tf_demo_parser::demo::header::Header),
-    DataTables(Vec<tf_demo_parser::demo::packet::datatable::SendTableName>),
-    StringEntry(String, usize),
+    _DataTables(Vec<tf_demo_parser::demo::packet::datatable::SendTableName>),
+    StringEntry(String, usize, StringTableEntry<'static>),
     PacketMeta(u32),
 }
 
 #[derive(Default)]
 pub struct GathererState {
     pub seen: Vec<GatherSeen>,
+    pub seen_string_table_names: HashSet<String>,
     pub seen_message_types: HashMap<u32, Vec<tf_demo_parser::MessageType>>,
     pub seen_packet_entities_types: HashSet<String>,
     pub seen_game_event_types: HashSet<GameEventType>,
 
+    pub seen_wearables: HashSet<u32>,
+    pub seen_player_entids: HashSet<u32>,
+    pub seen_ent_handles: HashSet<u32>,
+
     pub interesting_entities: HashMap<String, HashSet<(String, String)>>,
     pub interesting_events: HashMap<u32, Vec<GameEventType>>,
+    pub interesting_datatable_entries: Vec<ParseSendTable>,
+
+    pub outer_map: HashMap<u32, u32>,
 }
 
 #[derive(Default)]
 pub struct Gatherer {
     pub state: GathererState, 
     class_names: Vec<ServerClassName>,
+    match_attempts: Vec<MatchAttempt>,
+    
+}
+
+use std::io::{self, Read, Write};
+
+use crate::types::game::{Class, Team};
+#[allow(dead_code)]
+fn pause() {
+    let mut stdin = io::stdin();
+    let mut stdout = io::stdout();
+
+    // We want the cursor to stay at the end of the line, so we print without a newline and flush manually.
+    write!(stdout, "Press any key to continue...").unwrap();
+    stdout.flush().unwrap();
+
+    // Read a single byte and discard
+    let _ = stdin.read(&mut [0u8]).unwrap();
 }
 
 impl MessageHandler for Gatherer {
@@ -257,9 +284,23 @@ impl MessageHandler for Gatherer {
             server_classes: &[ServerClass],
             _parser_state: &ParserState,
         ) {
-        self.state.seen.push(GatherSeen::DataTables(
-            Vec::from(tables).iter().map(|table| table.name.clone()).collect()
-        ));
+
+        let tables = Vec::from(tables);
+
+        for table in tables {
+            match table.name.as_str() {
+                "m_iOwner" 
+                | "m_iHealing"
+                | "m_hMyWeapons"
+                | "_LPT_m_hMyWearables_8"
+                | "_ST_m_hMyWearables_8"
+                | "DT_WeaponMedigun"
+                => {
+                    self.state.interesting_datatable_entries.push(table.clone());
+                }
+                _ => {}
+            }
+        }
 
         self.class_names = server_classes
             .iter()
@@ -300,69 +341,427 @@ impl MessageHandler for Gatherer {
             // }
             Message::PacketEntities(m) => {
                 for ent in &m.entities {
-                    let class_name: &str = self
-                        .class_names
-                        .get(usize::from(ent.server_class))
-                        .map(|class_name| class_name.as_str())
-                        .unwrap_or("");
+                    self.handle_entity(ent, tick, _parser_state);
 
-                    self.state.seen_packet_entities_types.insert(class_name.to_string());
+                    // let class_name: &str = self
+                    //     .class_names
+                    //     .get(usize::from(ent.server_class))
+                    //     .map(|class_name| class_name.as_str())
+                    //     .unwrap_or("");
 
-                    match class_name {
-                        // "CSniperDot" 
-                        // | "CTFGrenadePipebombProjectile"
-                        // | "CTFPlayer"
-                        // | "CTFPlayerResource"
-                        // | "CTFProjectile_Rocket"
-                        // | "CTFProjectile_HealingBolt"
-                        // | "CTFProjectile_SentryRocket"
-                        // | "CTFTeam"
-                        // | "CWeaponMedigun"
-                        // => {
-                        //     for prop in ent.props(_parser_state) {
-                        //         let propident = prop.identifier.names().unwrap_or((prop.identifier.to_string().into(), "uhoh".into()));
+                    // self.state.seen_packet_entities_types.insert(class_name.to_string());
 
-                        //         self.state.interesting_entities
-                        //             .entry(class_name.to_string())
-                        //             .or_default()
-                        //             .insert((propident.0.to_string(), propident.1.to_string()));
-                        //     }
-                        // }
+                    // const BENT_TEAMNUM: SendPropIdentifier = 
+                    //     SendPropIdentifier::new("DT_BaseEntity", "m_iTeamNum");
 
-                        "CTFProjectile_Rocket"
-                        | "CTFGrenadePipebombProjectile"
-                        => {
-                            const BASEENTITY_HOWNER: SendPropIdentifier = 
-                                SendPropIdentifier::new("DT_BaseEntity", "m_hOwnerEntity");
+                    // const BENT_HOWNER: SendPropIdentifier =
+                    //     SendPropIdentifier::new("DT_BaseEntity", "m_hOwnerEntity");
 
 
-                            if ent.update_type == UpdateType::Enter {
-                                for prop in ent.props(_parser_state) {
-                                    match prop.identifier {
-                                        BASEENTITY_HOWNER => {
-                                            println!("Projectile Enter: HOwner {}", prop.value);
-                                        },
-                                        _ => {}
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
+                    // match class_name {
+                    //     "CTFPlayer" => {
+                    //         if ent.update_type == UpdateType::Enter {
+                    //             println!(":: Player enter, entity ID: {}, serial number: {}", ent.entity_index, ent.serial_number);
+                    //         }
+                    //         self.state.seen_player_entids.insert(u32::from(ent.entity_index));
+                    //     },
+
+                    //     "CTFRocketLauncher"
+                    //     | "CTFRocketLauncher_AirStrike"
+                    //     | "CTFRocketLauncher_DirectHit" 
+                    //     // not _mortar as it's unused
+                    //     // 
+                    //     => {
+                    //         if ent.update_type == UpdateType::Enter {
+                    //             let mut howner = 0;
+                    //             let mut team = 10;
+                    //             for prop in ent.props(_parser_state) {
+                    //                 match prop.identifier {
+                    //                     BENT_HOWNER => {
+                    //                         howner = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                         self.state.seen_ent_handles.insert(howner);
+                    //                         //println!("rocket launch enter w/ hOwner: {}", hand);
+                    //                     },
+                    //                     BENT_TEAMNUM => {
+                    //                         team = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     }
+                    //                     _ => {}
+                    //                 }
+                    //             }
+
+                    //             println!("rocket launch enter: hown {} team {}", howner, team);
+                    //         }
+                    //     }
+
+                    //     "CTFScatterGun" => {
+                    //         if ent.update_type == UpdateType::Enter {
+                    //             let mut howner = 0;
+                    //             let mut team = 10;
+                    //             for prop in ent.props(_parser_state) {
+                    //                 match prop.identifier {
+                    //                     BENT_HOWNER => {
+                    //                         howner = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                         self.state.seen_ent_handles.insert(howner);
+                    //                         //println!("rocket launch enter w/ hOwner: {}", hand);
+                    //                     },
+                    //                     BENT_TEAMNUM => {
+                    //                         team = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     }
+                    //                     _ => {}
+                    //                 }
+                    //             }
+
+                    //             println!("scatter enter: hown {} team {}", howner, team);
+                    //         }
+                    //     }
+
+                    //     "CTFFlamethrower" => {
+                    //         if ent.update_type == UpdateType::Enter {
+                    //             let mut howner = 0;
+                    //             let mut team = 10;
+                    //             for prop in ent.props(_parser_state) {
+                    //                 match prop.identifier {
+                    //                     BENT_HOWNER => {
+                    //                         howner = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                         self.state.seen_ent_handles.insert(howner);
+                    //                         //println!("rocket launch enter w/ hOwner: {}", hand);
+                    //                     },
+                    //                     BENT_TEAMNUM => {
+                    //                         team = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     }
+                    //                     _ => {}
+                    //                 }
+                    //             }
+
+                    //             println!("flamethrower enter: hown {} team {}", howner, team);
+                    //         }
+                    //     }
+
+                    //     "CTFGrenadeLauncher" 
+                    //     | "CTFPipebombLauncher"
+                    //     => {
+                    //         if ent.update_type == UpdateType::Enter {
+                    //             let mut howner = 0;
+                    //             let mut team = 10;
+                    //             for prop in ent.props(_parser_state) {
+                    //                 match prop.identifier {
+                    //                     BENT_HOWNER => {
+                    //                         howner = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                         self.state.seen_ent_handles.insert(howner);
+                    //                         //println!("rocket launch enter w/ hOwner: {}", hand);
+                    //                     },
+                    //                     BENT_TEAMNUM => {
+                    //                         team = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     }
+                    //                     _ => {}
+                    //                 }
+                    //             }
+
+                    //             println!("grenade/pipe launch enter: hown {} team {}", howner, team);
+                    //         }
+                    //     }
+
+                    //     "CTFWrench"
+                    //     => {
+                    //         if ent.update_type == UpdateType::Enter {
+                    //             let mut howner = 0;
+                    //             let mut team = 10;
+                    //             for prop in ent.props(_parser_state) {
+                    //                 match prop.identifier {
+                    //                     BENT_HOWNER => {
+                    //                         howner = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                         self.state.seen_ent_handles.insert(howner);
+                    //                         //println!("rocket launch enter w/ hOwner: {}", hand);
+                    //                     },
+                    //                     BENT_TEAMNUM => {
+                    //                         team = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     }
+                    //                     _ => {}
+                    //                 }
+                    //             }
+
+                    //             println!("wrench enter: hown {} team {}", howner, team);
+                    //         }
+                    //     }
+
+                    //     "CTFSniperRifle"
+                    //     | "CTFCompoundBow"
+                    //     => {
+                    //         if ent.update_type == UpdateType::Enter {
+                    //             let mut howner = 0;
+                    //             let mut team = 10;
+                    //             for prop in ent.props(_parser_state) {
+                    //                 match prop.identifier {
+                    //                     BENT_HOWNER => {
+                    //                         howner = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                         self.state.seen_ent_handles.insert(howner);
+                    //                         //println!("rocket launch enter w/ hOwner: {}", hand);
+                    //                     },
+                    //                     BENT_TEAMNUM => {
+                    //                         team = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     }
+                    //                     _ => {}
+                    //                 }
+                    //             }
+
+                    //             println!("snip/compound enter: hown {} team {}", howner, team);
+                    //         }
+                    //     }
+
+                    //     "CTFRevolver"
+                    //     => {
+                    //         if ent.update_type == UpdateType::Enter {
+                    //             let mut howner = 0;
+                    //             let mut team = 10;
+                    //             for prop in ent.props(_parser_state) {
+                    //                 match prop.identifier {
+                    //                     BENT_HOWNER => {
+                    //                         howner = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                         self.state.seen_ent_handles.insert(howner);
+                    //                         //println!("rocket launch enter w/ hOwner: {}", hand);
+                    //                     },
+                    //                     BENT_TEAMNUM => {
+                    //                         team = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     }
+                    //                     _ => {}
+                    //                 }
+                    //             }
+
+                    //             println!("revolver enter: hown {} team {}", howner, team);
+                    //         }
+                    //     }
+
+                    //     // "CSniperDot" 
+                    //     // | "CTFGrenadePipebombProjectile"
+                    //     // "CTFPlayer"
+                    //     // => {
+                    //     //     const 
+                    //     // },
+                    //     // | "CTFPlayerResource"
+                    //     // | "CTFProjectile_Rocket"
+                    //     // | "CTFProjectile_HealingBolt"
+                    //     // | "CTFProjectile_SentryRocket"
+                    //     // | "CTFTeam"
+                    //     // | "CWeaponMedigun"
+                    //     // => {
+                    //     //     for prop in ent.props(_parser_state) {
+                    //     //         let propident = prop.identifier.names().unwrap_or((prop.identifier.to_string().into(), "uhoh".into()));
+
+                    //     //         self.state.interesting_entities
+                    //     //             .entry(class_name.to_string())
+                    //     //             .or_default()
+                    //     //             .insert((propident.0.to_string(), propident.1.to_string()));
+                    //     //     }
+                    //     // }
+                    //     "CWeaponMedigun" => {
+                    //         const BENT_HOWNER: SendPropIdentifier =
+                    //             SendPropIdentifier::new("DT_BaseEntity", "m_hOwnerEntity");
+                    //         const BENT_MOVEPARENT: SendPropIdentifier =
+                    //             SendPropIdentifier::new("DT_BaseEntity", "moveparent");
+
+                    //         // CBaseCombatWeapon
+                    //         const BCOMBWEP_HOWNER: SendPropIdentifier = 
+                    //             SendPropIdentifier::new("DT_BaseCombatWeapon", "m_hOwner");
+                    //         const BCOMBWEP_STATE: SendPropIdentifier = 
+                    //             SendPropIdentifier::new("DT_BaseCombatWeapon", "m_iState");
+
+                    //         // CWeaponMedigun
+                    //         const WEP_MEDIGUN_BHEALING: SendPropIdentifier =
+                    //             SendPropIdentifier::new("DT_WeaponMedigun", "m_bHealing");
+                    //         const WEP_MEDIGUN_HHEALTARGET: SendPropIdentifier =
+                    //             SendPropIdentifier::new("DT_WeaponMedigun", "m_hHealingTarget");
+                    //         const WEP_MEDIGUN_HLASTHEALTARGET: SendPropIdentifier =
+                    //             SendPropIdentifier::new("DT_WeaponMedigun", "m_hLastHealingTarget");
+                    //         const WEP_MEDIGUN_BHOLSTERED: SendPropIdentifier =
+                    //             SendPropIdentifier::new("DT_WeaponMedigun", "m_bHolstered");
+
+                    //         #[derive(Default, Debug)]
+                    //         struct MedigunParse {
+                    //             pub bent_owner: Option<u32>,
+                    //             pub bent_moveparent: Option<String>,
+                    //             pub bcomw_owner: Option<u32>,
+                    //             pub bcomw_state: Option<u32>,
+                    //             pub wmed_healing: Option<bool>,
+                    //             pub wmed_holstered: Option<bool>,
+                    //             pub wmed_healtarg: Option<u32>,
+                    //             pub wmed_lasthealtarg: Option<u32>,
+                    //         }
+
+                    //         impl MedigunParse {
+                    //             pub fn has(&self) -> bool {
+                    //                 self.bent_owner.is_some()
+                    //                 || self.bent_moveparent.is_some()
+                    //                 || self.bcomw_owner.is_some()
+                    //                 || self.bcomw_state.is_some()
+                    //                 || self.wmed_healing.is_some()
+                    //                 || self.wmed_holstered.is_some()
+                    //                 || self.wmed_healtarg.is_some()
+                    //                 || self.wmed_lasthealtarg.is_some()
+                    //             }
+                    //         }
+
+                    //         let mut parse = MedigunParse::default();
+
+                    //         for prop in ent.props(_parser_state) {
+                    //             match prop.identifier {
+                    //                 BENT_TEAMNUM => {
+                    //                     let team = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     println!("medigun team: {}", team);
+                    //                 }
+                    //                 BENT_HOWNER => {
+                    //                     let hand = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     self.state.seen_ent_handles.insert(hand);
+                    //                     println!("saw howner bent {:?}", hand);
+                    //                     parse.bent_owner = Some(hand);
+                    //                 },
+                    //                 BENT_MOVEPARENT => {
+                    //                     if let SendPropValue::String(s) = prop.value {
+                    //                         parse.bent_moveparent = s.into();
+                    //                     }
+                    //                     else {println!("what? lol prop value bent moveparent not str: {:?}", prop.value);}
+                    //                 }
+                    //                 BCOMBWEP_HOWNER => {
+                    //                     let hand = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     self.state.seen_ent_handles.insert(hand);
+                    //                     println!("saw howner combwep {:?}", hand);
+                    //                     parse.bcomw_owner = Some(hand);
+                    //                 }
+                    //                 BCOMBWEP_STATE => {
+                    //                     parse.bcomw_state = Some(i64::try_from(&prop.value).unwrap_or_default() as u32);
+                    //                 }
+                    //                 WEP_MEDIGUN_BHEALING => {
+                    //                     parse.wmed_healing = Some(i64::try_from(&prop.value).unwrap_or_default() != 0);
+                    //                 }
+                    //                 WEP_MEDIGUN_BHOLSTERED => {
+                    //                     parse.wmed_holstered = Some(i64::try_from(&prop.value).unwrap_or_default() != 0);
+                    //                 }
+                    //                 WEP_MEDIGUN_HHEALTARGET => {
+                    //                     let hand = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     self.state.seen_ent_handles.insert(hand);
+                    //                     parse.wmed_healtarg = Some(hand);
+                    //                 }
+                    //                 WEP_MEDIGUN_HLASTHEALTARGET => {
+                    //                     let hand = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    //                     self.state.seen_ent_handles.insert(hand);
+                    //                     parse.wmed_lasthealtarg = Some(hand);
+                    //                 }
+                    //                 _ => {}
+                    //             }
+                    //         }
+
+                    //         if parse.has() {
+                    //             if let Some(targ_id) = parse.wmed_healtarg {
+                    //                 if _parser_state.entity_classes.contains_key(&EntityId::from(targ_id)) {
+                    //                     println!("nice try");
+                    //                 }
+                    //                 if self.state.seen_player_entids.contains(&targ_id) {
+                    //                     println!(":: Medigun target matched entity id");
+                    //                 }
+                    //                 else {
+                    //                     //println!(":: Medigun target {} did not match any player entity id", targ_id);
+                    //                     // aight fuck it we ball
+
+                    //                     // check EVERYTHING we can for this target id
+                    //                     //println!("ent class: {}, ent class id: {}",
+                    //                     //    _parser_state.entity_classes.contains_key(&EntityId::from(targ_id)),
+                    //                     //    _parser_state.entity_classes.values().contains(&ClassId::from(targ_id as u16))
+                    //                     //);
+                    //                 }
+                    //             }
+                    //             //println!(":: Medigun parse has props: {:?}", ent.props(_parser_state).collect_vec());
+                    //             //println!(":: Medigun parse has props: {:?}", parse);
+                    //         }
+                    //     }
+
+                    //     "CTFProjectile_Rocket"
+                    //     | "CTFGrenadePipebombProjectile"
+                    //     => {
+                    //         const BASEENTITY_HOWNER: SendPropIdentifier = 
+                    //             SendPropIdentifier::new("DT_BaseEntity", "m_hOwnerEntity");
+
+                            
+
+                    //         if ent.update_type == UpdateType::Enter {
+                    //             // println!("- {:}", class_name);
+                    //             // for prop in ent.props(_parser_state) {
+                    //             //     println!(":: {:?}", prop);
+                    //             // }
+
+                    //             for prop in ent.props(_parser_state) {
+                    //                 match prop.identifier {
+                    //                     BASEENTITY_HOWNER => {
+                    //                         //println!("Projectile Enter: HOwner {}", prop.value);
+                    //                     },
+                    //                     _ => {}
+                    //                 }
+                    //             }
+                    //         }
+                    //     }
+                    //     _ => {}
+                    // }
                 }
             }
             Message::GameEvent(m) => {
                 self.state.seen_game_event_types.insert(m.event.event_type());
 
                 match &m.event {
-                    GameEvent::RoundStart(_)
-                    | GameEvent::TeamPlayRoundStart(_)
+                    GameEvent::TeamPlayPointCaptured(evt) => {
+                        println!("{} Point {} captured (\"{:?}\") by {:?} team: {:?}",
+                            tick, evt.cp, evt.cp_name, Team::new(evt.team), evt.cappers);
+
+                        
+                    }
+
+                    // GameEvent::PlayerSpawn(evt) => {
+                    //     println!("{} player spawn: {} (team: {}, class: {:?})", tick, evt.user_id, evt.team, crate::types::game::Class::new(evt.class))
+                    // }
+
+                    // GameEvent::PlayerHealed(_evt) => {
+                    //     // Player healed reports:
+                    //     // 1: A full ~second of healing by a medic
+                    //     // 2: If the player only gets healed a little bit by a medic
+                    //     // 3: Crossbow heals
+                    //     // 4: Dispenser heals (definitely)
+                    //     // 5: Regeneration (medic, cozy, etc.)
+                    //     // Essentially, it reports whenever the +hp appears above your healthbar
+                    //     //println!("{} player healed: {} healed {} by {}", tick, evt.patient, evt.amount, evt.healer);
+                    // }
+
+                    // GameEvent::CrossbowHeal(_evt) => {
+                    //     //println!("{} crossbow heal: {} healed {} by {}", tick, evt.target, evt.amount, evt.healer)
+                    // }
+
+                    // GameEvent::MedicDeath(_evt) => {
+                    //     //println!("{} MEDIC DEATH: {}, was healing {}", tick, evt.user_id, evt.healing);
+                    // }
+
+                    // GameEvent::PlayerRegenerate(_) => {
+                    //     // Player regenerate = class change probably
+                    //     //println!("{} player regenerate", tick)
+                    // }
+                    _ => {}
+                }
+
+                match &m.event {
+                    // GameEvent::RoundStart(_)
+                    GameEvent::TeamPlayRoundStart(_)
                     | GameEvent::TeamPlayRestartRound(_)
-                    | GameEvent::TeamPlayMapTimeRemaining(_)
-                    | GameEvent::PlayerChargeDeployed(_)
+                    // | GameEvent::TeamPlayMapTimeRemaining(_)
+                    // | GameEvent::PlayerChargeDeployed(_)
                     | GameEvent::TeamPlayRoundWin(_)
-                    | GameEvent::PlayerRegenerate(_)
-                    | GameEvent::NpcHurt(_)
+                    | GameEvent::ControlPointStartTouch(_)
+                    | GameEvent::ControlPointEndTouch(_)
+                    | GameEvent::TeamPlayCaptureBlocked(_)
+                    | GameEvent::TeamPlayCaptureBroken(_)
+                    | GameEvent::TeamPlayPointCaptured(_)
+                    // | GameEvent::PlayerRegenerate(_)
+                    // | GameEvent::NpcHurt(_)
+                    //GameEvent::PlayerHealed(_)
+                    //| GameEvent::PlayerHurt(_)
+                    //| GameEvent::RocketJump(_)
+                    //| GameEvent::StickyJump(_)
+                    //| GameEvent::RocketJumpLanded(_)
+                    //| GameEvent::StickyJumpLanded(_)
                     => {
                         self.state.interesting_events
                             .entry(u32::from(tick))
@@ -392,7 +791,7 @@ impl MessageHandler for Gatherer {
             _entries: &StringTableEntry,
             _parser_state: &ParserState,
         ) {
-        self.state.seen.push(GatherSeen::StringEntry(String::from(table), index));
+        self.state.seen.push(GatherSeen::StringEntry(String::from(table), index, _entries.to_owned()));
     }
 
     fn into_output(self, _state: &ParserState) -> Self::Output {
@@ -400,7 +799,284 @@ impl MessageHandler for Gatherer {
     }
 }
 
-// Actual analyser
+//use std::str::FromStr;
+
+pub enum WeaponSlot {
+    Primary = 0,
+    Secondary = 1,  // Includes sapper & medigun
+    Melee = 2,
+    PDA1 = 3,       // Build PDA / Invis watch
+    PDA2 = 4 ,      // Destroy PDA / Disguise kit
+}
+
+fn item_useable_class(class_name: &str) -> Option<(Class, WeaponSlot)> {
+    // Divide the class names into ones that are:
+    // 1: Class specific
+    // 2: Carry information about the team
+    // 3: Have a moveparent and/or handle to their owner
+
+    // All weapons have the following class hierarchy:
+    // CBaseEntity > CBaseAnimating > CEconEntity > CBaseCombatWeapon > CTFWeaponBase
+    // Within CBaseEntity: https://sigwiki.potato.tf/index.php/CBaseEntity
+    //      - m_iTeamNum            The team this object is on. For weapons on players should be 2/3.
+    //      - m_hOwnerEntity        The handle we care about and are trying to match, typically
+    //      - moveparent            Immediate parent in movement hierarchy. Typically, is the player.
+    //                              Notably, the wiki reports this as a String, but it is an Integer.
+    
+    // Within CBaseCombatWeapon:
+    //      - m_hOwner              Should be the same as m_hOwnerEntity ?
+
+
+    // After WeaponBase, there are a few more classes that specialize:
+    // CTFWeaponBaseMelee   - the base class for all melee weapons
+    // CTFWeaponBaseGun     - All ranged weapons, e.g. primaries and secondaries
+    // CTFLunchBox          - Any edible items
+    // CTFWeaponBuilder     - Engineer's hidden "builder" weapon and Spy's stock Sapper
+    // CTFWeaponInvis       - Invis watches
+    // CTFWeaponPDA         - Base class for Engineer PDAs and Diguise Kit
+
+    use Class::*;
+    use WeaponSlot::*;
+    // https://sigwiki.potato.tf/index.php/Entity_Properties
+    match class_name {
+        // All scout primaries are covered
+        "CTFScattergun"             // Stock, FaN, and Back Scatter
+        | "CTFSodaPopper"           // Soda popper
+        | "CTFPEPBrawlerBlaster"    // Baby Face's
+        | "CTFPistol_ScoutPrimary"  // Shortstop
+        => Some((Scout, Primary)),
+
+        "CTFPistol_ScoutSecondary"  // 
+        | "CTFPistol_Scout"         // < CTFWeaponBaseGun
+        | "CTFLunchBox_Drink"       // < CTFLunchBox    drinks
+        | "CTFCleaver"              // < CTFJar         cleaver
+        | "CTFJarMilk"              // < CTFJar         mad milk
+        => Some((Scout, Secondary)),
+
+        "CTFBat"                // < CTFWeaponBaseMelee all other bats
+        | "CTFBat_Fish"         // < CTFBat             FISH
+        | "CTFBat_Wood"         // < CTFBat             sandman
+        | "CTFBat_Giftwrap"     // < CTFBat_Wood        wrap assassin
+        => Some((Scout, Melee)),
+
+        // All soldier primaries are covered, so soldier is covered
+        "CTFRocketLauncher"             // < CTFWeaponBaseGun
+        | "CTFRocketLauncher_AirStrike" // < CTFRocketLauncher
+        | "CTFRocketLauncher_DirectHit" // < ^
+        | "CTFRocketLauncher_Mortar"    // < ^ unused in-game but included for posterity
+        | "CTFParticleCannon"           // < ^Cow Mangler
+        => Some((Soldier, Primary)),
+
+        "CTFShotgun_Soldier"
+        | "CTFBuffItem"
+        | "CTFParachute_Secondary"
+        | "CTFRaygun"
+        => Some((Soldier, Secondary)),
+
+        "CTFShovel" // couldn't find pickaxes ?
+        => Some((Soldier, Melee)),
+
+        // All pyro primaries are covered
+        "CTFFlamethrower"
+        | "CTFWeaponFlameBall"
+        => Some((Pyro, Primary)),
+
+        "CTFFlareGun"
+        | "CTFFlareGun_Revenge" // man melter
+        | "CTFShotgun_Pyro"
+        | "CTFJarGas"
+        => Some((Pyro, Secondary)),
+
+        "CTFFireAxe"
+        | "CTFSlap"
+        | "CTFBreakableSign"    // neon annihilator
+        => Some((Pyro, Melee)),
+
+        // Holes in finding demo handles:
+        // -> Booties + Shield + Katana/Pain Train
+        // Would need to look at wearables :(
+        "CTFGrenadeLauncher"
+        | "CTFCannon"
+        | "CTFParachute_Primary"
+        => Some((Demoman, Primary)),
+
+        "CTFPipebombLauncher"
+        => Some((Demoman, Secondary)),
+
+        "CTFBottle"
+        | "CTFStickBomb"        // caber
+        | "CTFSword"        // does not include katana; that's CTFKatana
+        => Some((Demoman, Melee)),
+
+        "CTFMinigun"
+        => Some((Heavy, Primary)),
+
+        "CTFShotgun_HWG"
+        | "CTFLunchBox"
+        => Some((Heavy, Secondary)),
+
+        "CTFFists"
+        => Some((Heavy, Melee)),
+
+        "CTFShotgun_Revenge"           // frontier
+        | "CTFShotgunBuildingRescue"    // rescue ranger
+        => Some((Engineer, Primary)),
+
+        "CTFMechanicalArm"      // short circuit
+        | "CTFLaserPointer"     // wrangler
+        => Some((Engineer, Secondary)),
+
+        "CTFWrench"
+        | "CTFRobotArm"
+        => Some((Engineer, Melee)),
+
+        "CTFWeaponPDA"
+        | "CTFWeaponPDA_Engineer_Build"
+        => Some((Engineer, PDA1)),
+
+        "CTFWeaponPDA_Engineer_Destroy"
+        => Some((Engineer, PDA2)),
+
+        "CTFSyringeGun"
+        | "CTFCrossbow" // inherits from CTFRocketLauncher funnily enough
+        => Some((Medic, Primary)),
+
+        "CWeaponMedigun"
+        => Some((Medic, Secondary)),
+
+        "CTFBonesaw"
+        => Some((Medic, Melee)),
+
+        "CTFSniperRifle"
+        | "CTFSniperRifleClassic"
+        | "CTFSniperRifleDecap"
+        | "CTFCompoundBow"  // both hunts & compound, inherits from PipebombLauncher
+        => Some((Sniper, Primary)),
+
+        "CTFSMG"
+        | "CTFChargedSMG"
+        | "CTFJar"
+        => Some((Sniper, Secondary)),
+
+        "CTFClub"
+        => Some((Sniper, Melee)),
+
+        "CTFRevolver"
+        => Some((Spy, Primary)),
+
+        "CTFWeaponSapper"
+        => Some((Spy, Secondary)),
+
+        "CTFKnife"
+        => Some((Spy, Melee)),
+
+        "CTFWeaponInvis"
+        => Some((Spy, PDA1)),
+
+        "CTFWeaponPDA_Spy"
+        => Some((Spy, PDA2)),
+
+        _ => None
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct MatchAttempt {
+    pub h_owner: u32,
+    pub team: Team,
+    pub class: Class,
+}
+
+
+impl Gatherer {
+    fn handle_entity(&mut self, ent: &PacketEntity, tick: DemoTick, parser_state: &ParserState) {
+        let class_name: &str = self
+            .class_names
+            .get(usize::from(ent.server_class))
+            .map(|class_name| class_name.as_str())
+            .unwrap_or("");
+
+        for prop in ent.props(parser_state) {
+            if let Some((table_name, prop_name)) = prop.identifier.names() {
+                if table_name == "DT_AttributeContainer" && prop_name == "m_hOuter" {
+                    let val = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                    println!("{:} @ {} m_hOuter: {} ({:X})", class_name, ent.entity_index, val, val);
+                    self.state.outer_map.insert(
+                        val,
+                        u32::from(ent.entity_index)
+                    );
+                }
+            }
+        }
+
+        if let Some((class, _)) = item_useable_class(class_name) {
+            self.handle_class_entity(ent, tick, parser_state, class);
+        }
+        else {
+            match class_name {
+                "CTFPlayer" => self.handle_player_entity(ent, tick, parser_state),
+                //"CTFPlayerResource" => self.handle_player_resource(ent, tick, parser_state),
+                _ => {}
+            }
+        }
+    }
+
+    fn handle_player_entity(
+        &mut self,
+        ent: &PacketEntity,
+        _tick: DemoTick,
+        _parser_state: &ParserState
+    ) {
+        if ent.update_type == UpdateType::Enter {
+            println!("player enter table names & associated properties: ");
+            for prop in ent.props(_parser_state) {
+                if let Some((table_name, prop_name)) = prop.identifier.names() {
+                    println!("{:}.{:}: {:?}", table_name, prop_name, prop.value);
+                }
+            }
+        }
+
+        self.state.seen_player_entids.insert(u32::from(ent.entity_index));
+    }
+
+    fn handle_class_entity(&mut self, ent: &PacketEntity, _tick: DemoTick, parser_state: &ParserState, class: Class) {
+        const BENT_TEAMNUM: SendPropIdentifier = 
+            SendPropIdentifier::new("DT_BaseEntity", "m_iTeamNum");
+
+        const BENT_HOWNER: SendPropIdentifier =
+            SendPropIdentifier::new("DT_BaseEntity", "m_hOwnerEntity");
+
+        //const BENT_MOVEPARENT: SendPropIdentifier =
+        //    SendPropIdentifier::new("DT_BaseEntity", "moveparent");
+        
+
+        if ent.update_type == UpdateType::Enter {
+            let mut matmp = MatchAttempt::default();
+            matmp.class = class;
+            for prop in ent.props(parser_state) {
+                match prop.identifier {
+                    BENT_HOWNER => {
+                        matmp.h_owner = i64::try_from(&prop.value).unwrap_or_default() as u32;
+                        self.state.seen_ent_handles.insert(matmp.h_owner);
+                        // if let Some((table_name, prop_name)) = prop.identifier.names() {
+                        //     if let Ok(player_id) = u32::from_str(prop_name.as_str()) {
+                        //         println!("what the fuck: {}", player_id)
+                        //     }
+                        // }
+                    },
+                    BENT_TEAMNUM => {
+                        matmp.team = Team::new(i64::try_from(&prop.value).unwrap_or_default());
+                    },
+                    _ => {}
+                }
+            }
+
+            if matmp.h_owner != 0 && matmp.team.is_player() {
+                self.match_attempts.push(matmp);
+            }
+        }
+    }
+}
 
 #[derive(Default, Debug, Clone)]
 pub struct InternalGameState {
